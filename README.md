@@ -5,7 +5,7 @@ PA's Marketplace. Hosts plugins for AI agents: Claude through `.claude-plugin/ma
 ## Install
 
 ```text
-/plugin marketplace add folotp/pa-marketplace
+/plugin marketplace add folotp/pa-agent-kit
 /plugin install <plugin-name>@pa-marketplace
 /reload-plugins
 ```
@@ -85,7 +85,7 @@ To get instant updates instead of waiting up to 30 min for cron, do these two st
 
 Generate a token at <https://github.com/settings/tokens>:
 - Classic PAT: `repo` scope.
-- Fine-grained PAT (preferred, tighter): scoped to `folotp/pa-marketplace`, repository permission `Contents: write` (this is what the `repository_dispatch` endpoint requires).
+- Fine-grained PAT (preferred, tighter): scoped to `folotp/pa-agent-kit`, repository permission `Contents: write` (this is what the `repository_dispatch` endpoint requires).
 
 Then in the source repo: **Settings → Secrets and variables → Actions → New repository secret**. Name it `MARKETPLACE_DISPATCH_TOKEN`, paste the PAT.
 
@@ -103,7 +103,7 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
-      - uses: folotp/pa-marketplace/.github/actions/notify-marketplace@main
+      - uses: folotp/pa-agent-kit/.github/actions/notify-marketplace@main
         with:
           token: ${{ secrets.MARKETPLACE_DISPATCH_TOKEN }}
 ```
