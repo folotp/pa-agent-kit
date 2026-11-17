@@ -224,7 +224,17 @@ Templates in `harness/bindings/`, copied to the repository root by `./dev sync` 
 | Codex | `.codex/hooks.json` | `Bash` (also matches `exec_command`) | same fields as Claude Code | exit 2, reason on stderr |
 | Antigravity | `.agents/hooks.json` | `run_command` | `toolCall.name`, `toolCall.args.CommandLine` | `{"decision":"deny","reason":…}` on stdout, exit 0 |
 
-Codex loads project hooks only in a trusted project, and only after the hooks themselves are reviewed and trusted (`/hooks`); a changed hook is skipped until it is trusted again. Codex and Antigravity run the command from the session's directory, so their bindings find the root with `git rev-parse --show-toplevel`. Delivery in each agent was checked by hand in session 20 (see the tracker).
+Codex loads project hooks only in a trusted project, and only after the hooks themselves are reviewed and trusted (`/hooks`); a changed hook is skipped until it is trusted again. Codex and Antigravity run the command from the session's directory, so their bindings find the root with `git rev-parse --show-toplevel`.
+
+Delivery, checked by hand on 2026-11-17 (session 20) with `git push --dry-run origin HEAD:main`, which every agent refused with the guard's reason:
+
+| Agent | Version | Where | Result |
+|---|---|---|---|
+| Claude Code | `claude -p --permission-mode default` | linked worktree | denied |
+| Antigravity | `agy` 1.5.10 | linked worktree | denied ("tool call denied by pre-tool hook") |
+| Codex | codex-cli 0.169.0 | plain clone, trusted, hook trusted in `/hooks` | denied ("Command blocked by PreToolUse hook") |
+
+**Codex does not load project hooks in a linked git worktree.** In a worktree of a trusted checkout, `/hooks` listed nothing, and `codex exec --trust` saved no trust for the worktree's path: Codex takes the project to be the main checkout and reads `.codex/` there, not in the worktree. In a plain clone of the same commit the hook loaded. So, in Codex, a branch's hook changes cannot be tried from its worktree, and a worktree session runs the hooks of the main checkout's branch (usually `main`). Codex lists the hook as "unnamed hook"; that is cosmetic.
 
 ## Token script
 
