@@ -17,14 +17,6 @@
       ],
       "always": true
     },
-    "spec-live": {
-      "argv": [
-        "./scripts/dev",
-        "_gate",
-        "spec-live"
-      ],
-      "always": true
-    },
     "code": {
       "argv": [
         "./scripts/dev",

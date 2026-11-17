@@ -2,7 +2,7 @@
 # dev: the core dispatcher. Every verb runs under `mise exec`, so tools come from the pinned
 # versions in mise.toml and never from the shell. Contract and rules: docs/harness-core.md.
 #
-# Usage: ./dev setup | check | ci | gate [<sha>] | apply|deploy [args…] | x <command…>
+# Usage: ./dev setup | check | ci | gate [<sha>] | apply|deploy [args…] | x <command…> | <verb> [args…]
 # `gate` and the release verb (`apply` or `deploy`, named in harness.toml) belong to harness/gate.
 #
 # Layout: this file is <root>/harness/dev (or <root>/.harness/dev in a repository that syncs the
@@ -71,15 +71,20 @@ parsed="$(parse_conf)"
 profile=""
 tools=""
 checks=""
+verbs=""
+check_command=""
 while IFS="$(printf '\t')" read -r kind a b; do
   case "$kind" in
     conf)
       case "$a" in
         profile) profile="$b" ;;
         tools) tools="$b" ;;
+        check) check_command="$b" ;;
       esac
       ;;
     check) checks="$checks$a	$b
+" ;;
+    verb) verbs="$verbs$a	$b
 " ;;
   esac
 done <<EOF
@@ -122,11 +127,19 @@ case "$cmd" in
     [ "$#" -eq 1 ] || die "usage: ./dev check"
     verify_tools
     print_tools
+    # The repository's own offline check (harness.toml `check`): it must contact nothing.
+    if [ -n "$check_command" ]; then
+      bash -c "$check_command" </dev/null || die "check failed: $check_command"
+    fi
     ;;
   ci)
     [ "$#" -eq 1 ] || die "usage: ./dev ci"
     verify_tools
     print_tools
+    if [ -n "$check_command" ]; then
+      echo "== check"
+      bash -c "$check_command" </dev/null || die "check failed: $check_command"
+    fi
     [ -n "$checks" ] || die "harness.toml: no checks"
     while IFS="$(printf '\t')" read -r name command_line; do
       [ -n "$name" ] || continue
@@ -150,6 +163,18 @@ EOF
     exec "$@"
     ;;
   *)
-    die "usage: ./dev setup | check | ci | gate [<sha>] | apply|deploy [args…] | x <command…>"
+    # A verb of the repository's own, declared in the [verbs] table of harness.toml.
+    while IFS="$(printf '\t')" read -r name command_line; do
+      [ -n "$name" ] || continue
+      if [ "$name" = "$cmd" ]; then
+        shift
+        verify_tools
+        # Arguments reach the command as positional parameters, never spliced into its text.
+        exec bash -c "$command_line \"\$@\"" "dev $cmd" "$@"
+      fi
+    done <<EOF
+$verbs
+EOF
+    die "usage: ./dev setup | check | ci | gate [<sha>] | apply|deploy [args…] | x <command…> | <verb of harness.toml> [args…]"
     ;;
 esac
