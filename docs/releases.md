@@ -6,10 +6,16 @@ Merging a version bump is the release.
 
 1. Bump the plugin's `version` in its `plugin.json` (`/bump-plugin <name> <version>` also updates the README table) and merge the PR.
 2. [`release.yml`](../.github/workflows/release.yml) runs on the push to `main`. For each plugin whose version differs from the one before the push, it tags `<plugin>/v<version>` on the merge commit and opens a **draft** release. A merge that bumps nothing creates nothing.
-3. Attach the assets (the `.plugin` zips, once the packaging exists) to the draft.
+3. The same run builds the plugin's `<name>-v<version>.plugin` zip from the tagged commit ([`scripts/plugin_zip.py`](../scripts/plugin_zip.py)) and uploads it to the draft. Check the asset (`gh release view <tag>`, `unzip -l`).
 4. Publish: `gh release edit <plugin>/v<version> --draft=false`. With release immutability on, a published release and its tag can no longer change, which is why assets come first.
 
 To preview what a run would do, start the workflow by hand: `gh workflow run release.yml -f base=<commit before the change>`. `dry_run` is on by default and prints the plan without creating a tag or release. Locally: `python3 scripts/release-plugins.py --base <commit> --dry-run`.
+
+### The `.plugin` zips
+
+The zip carries a plugin's payload with the plugin root at the archive root; it is how skills are loaded by hand in the Gemini app. Selection: the plugin's `config/package-files.json` when it exists (an allowlist of files and directories), otherwise every tracked file; development configuration (`.claude`, `.codex`, `.agents`, `.github`, `tests`) never ships. It is built from a git revision, not the working tree, so local files cannot leak in. Entries are sorted with fixed timestamps, so two builds of one commit give the same bytes on the same Python and zlib (across other zlib versions the compressed bytes may differ while the contents stay the same).
+
+Build locally, any plugin and revision: `python3 scripts/plugin_zip.py --ref HEAD --out dist --list organon` (no names builds all four). If the upload step fails in a release run, the draft stays without its asset: build the zip with the command above at the tagged commit and `gh release upload <tag> <file>`.
 
 If a run fails halfway, rerun it: tags that already exist are skipped. Design and recovery notes: [protected-main.md](protected-main.md).
 

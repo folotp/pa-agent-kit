@@ -5,6 +5,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
+from unittest import mock
 from pathlib import Path
 
 SPEC = importlib.util.spec_from_file_location(
@@ -73,6 +75,29 @@ class PlanReleasesTests(unittest.TestCase):
         self.commit("bad version")
         with self.assertRaises(ValueError):
             rp.plan_releases(self.repo, self.base, "HEAD")
+
+    def test_publish_attaches_the_zip_after_the_draft_exists(self):
+        self.write("beta", "2.1.0", legacy=True)
+        self.commit("bump beta")
+        calls = []
+        real_run = subprocess.run
+
+        def fake_run(cmd, **kwargs):
+            if cmd[0] == "git" and cmd[1] != "push":
+                return real_run(cmd, **kwargs)  # local git is real; push and gh are not
+            calls.append(cmd)
+            if cmd[:3] == ["gh", "release", "upload"]:
+                with zipfile.ZipFile(cmd[4]) as archive:  # the asset exists when uploaded
+                    self.assertIn(".claude-plugin/plugin.json", archive.namelist())
+            return mock.Mock(returncode=0)
+
+        releases = rp.plan_releases(self.repo, self.base, "HEAD")
+        with mock.patch.object(rp.subprocess, "run", side_effect=fake_run):
+            rp.publish_plan(self.repo, releases, "HEAD")
+        self.assertEqual(git(self.repo, "tag", "--list", "beta/*"), "beta/v2.1.0")
+        verbs = [c[2] for c in calls if c[:2] == ["gh", "release"]]
+        self.assertEqual(verbs, ["create", "upload"])
+        self.assertNotIn("--draft=false", [a for c in calls for a in c])
 
 
 if __name__ == "__main__":
