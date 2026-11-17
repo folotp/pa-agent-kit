@@ -189,3 +189,28 @@ The tests replace GitHub with a `gh` shell function that answers from files: the
 ### Moving a live repository to it (sessions 26 and 27)
 
 `dev.conf` becomes the `[gate]` table; `scripts/` gets the release command, cut from the repository's `./dev` (`run_apply` and the `tfvars` checks for `network-config`; `read_target`, `release_deploy` and the host-`HEAD` check for `ha-config`, with `--check` exiting 3). The record directories keep their names (`dev-apply`, `dev-deploy`), so the last released commit carries over.
+
+## Guard
+
+`harness/guard` is the one pre-tool-use hook of the core, for Claude Code, Codex and Antigravity (report 2.2, 'Hooks'). It reads the shell command an agent is about to run and denies:
+
+| When | What | Why |
+|---|---|---|
+| Always | a push to `main` or `master`; a force push (`--force`, `-f`, `--force-with-lease`, `+refspec`, `--mirror`); a remote branch deletion (`--delete`, `-d`, `:branch`, `--prune`); `--no-verify` on any git command; `gh pr merge`, `gh pr ready`, the merge API | PA merges; the git hooks run `./dev check` |
+| Where nobody answers a prompt | `./dev apply`, `./dev deploy` (quoted, through a path, `mise exec`, `gh-token.sh` or `bash -c` too) and `gate release` / `gate --stage2` | the release confirms on the terminal and prompts in the Keychain |
+
+"Where nobody answers a prompt" means: a Claude Code cloud session (`CLAUDE_CODE_REMOTE=true`); a permission mode other than `default`, `acceptEdits`, `plan` or `auto` (`bypassPermissions`, where session 12 saw an `ask` rule not prompt; `dontAsk`; a missing mode); and Antigravity, whose payload carries no mode. Everything else passes: the guard is not a permission system, and the repository's own rules and hooks (the connector guards of `ha-config`, for instance) stay beside it.
+
+It fails closed: no `jq`, a payload it cannot read or an unknown agent denies the call. It uses bash builtins and `jq` only (`/usr/bin/jq` ships with macOS; CI runners have it). Commands are matched as text, one simple command at a time (split on `;`, `&`, `|` and newlines), so a commit message that quotes a denied command is denied too: reword it. Early warning, not the boundary (report 2.3): an agent with a shell can edit the guard or its bindings, and a hook that cannot start (missing file, not executable) lets the call through in all three agents.
+
+### Bindings
+
+Templates in `harness/bindings/`, copied to the repository root by `./dev sync` (session 23). They call `.harness/guard`, the synced location; this repository's own copies call `harness/guard`, and `tests/test_guard.py` checks that the two agree.
+
+| Agent | File | Matcher | Payload read | Deny |
+|---|---|---|---|---|
+| Claude Code | `.claude/settings.json` | `Bash` | `tool_name`, `tool_input.command`, `permission_mode` | exit 2, reason on stderr |
+| Codex | `.codex/hooks.json` | `Bash` (also matches `exec_command`) | same fields as Claude Code | exit 2, reason on stderr |
+| Antigravity | `.agents/hooks.json` | `run_command` | `toolCall.name`, `toolCall.args.CommandLine` | `{"decision":"deny","reason":…}` on stdout, exit 0 |
+
+Codex loads project hooks only in a trusted project, and only after the hooks themselves are reviewed and trusted (`/hooks`); a changed hook is skipped until it is trusted again. Codex and Antigravity run the command from the session's directory, so their bindings find the root with `git rev-parse --show-toplevel`. Delivery in each agent was checked by hand in session 20 (see the tracker).

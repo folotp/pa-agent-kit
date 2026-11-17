@@ -10,5 +10,5 @@ tools = ["python3", "shellcheck", "actionlint"]
 [checks]
 unit-tests = "python3 -B -m unittest discover -s tests -v"
 marketplace = "python3 -B scripts/validate-marketplace.py"
-shellcheck = "shellcheck dev harness/dev harness/gate"
+shellcheck = "shellcheck dev harness/dev harness/gate harness/guard"
 actionlint = "actionlint"
