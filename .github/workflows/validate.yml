@@ -42,3 +42,43 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./dev ci
+
+  # Path filters: a plugin's own checks run only when files under plugins/<name>/ change.
+  # `validate` above always runs (it is the required check). To add a plugin's checks, add an
+  # output here and a job gated on it; a skipped job counts as passing for branch protection.
+  # Plain `git diff` instead of a third-party filter action: no dependency to pin.
+  changes:
+    name: Changed plugins
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      pa_toolkit: ${{ steps.filter.outputs.pa_toolkit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: filter
+        env:
+          # Empty outside pull requests: pushes to main and manual runs check every plugin.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          changed() {
+            [ -z "$BASE_SHA" ] || ! git diff --quiet "$BASE_SHA"...HEAD -- "plugins/$1/"
+          }
+          if changed pa-toolkit; then echo "pa_toolkit=true" >> "$GITHUB_OUTPUT"; else echo "pa_toolkit=false" >> "$GITHUB_OUTPUT"; fi
+
+  plugin-pa-toolkit:
+    name: Plugin checks (pa-toolkit)
+    needs: changes
+    if: needs.changes.outputs.pa_toolkit == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Unit tests
+        working-directory: plugins/pa-toolkit
+        run: python3 -B -m unittest discover -s tests -v
