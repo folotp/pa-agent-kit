@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
-"""Minimal CI-safe subset of the marketplace-consistency-checker agent.
+"""Validate the marketplace manifests against the plugin trees in this repo.
 
-Validates the bumper's diff before the workflow commits:
-  - marketplace.json parses as JSON
-  - every external entry has ref (non-empty) and sha (40-char hex)
-  - no external entry carries forbidden fields (`commit`, top-level `version`)
-  - the README plugins-table row exists for each external entry
-  - [online only] the README version cell matches the version declared by
-    plugin.json at the pinned ref
+Every plugin is listed by relative path, so the manifests and the plugin
+trees travel in one commit and the check needs no network. It verifies:
+  - the Claude Code manifest parses and every entry's `source` is a
+    `./plugins/<dir>` string naming an existing directory (no cross-repository
+    sources, no `..`, no pins: `ref`, `sha`, `commit`)
+  - no entry carries a top-level `version` (plugin.json is the only source)
+  - each plugin directory has a plugin.json (root, or `.claude-plugin/`) whose
+    `name` matches the entry and whose `version` is non-empty
+  - the README plugins table has a row for each entry with the same version
+  - the Codex manifest (`.agents/plugins/marketplace.json`) lists only plugins
+    that the Claude Code manifest lists, with `{"source": "local", "path": ...}`
+    pointing at the same directory
 
-Exits non-zero on any failure. Stdlib only. Shells out to `gh` for the
-plugin.json read at the pinned ref (online mode).
-
-Pass --offline to skip the GitHub API call. Used by the PostToolUse hook
-to keep the local edit loop fast; CI uses the default (online) mode.
+Exits non-zero on any failure. Stdlib only. `--offline` is accepted and ignored
+(kept so the PostToolUse hook and CI invocations do not change).
 """
 
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -31,36 +31,25 @@ MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 AGENTS_MARKETPLACE = REPO_ROOT / ".agents" / "plugins" / "marketplace.json"
 README = REPO_ROOT / "README.md"
 
-SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+RELATIVE_SOURCE = re.compile(r"^\./plugins/[A-Za-z0-9][A-Za-z0-9._-]*$")
+FORBIDDEN_ENTRY_FIELDS = ("version", "ref", "sha", "commit")
 
 
-def gh(*args: str) -> str:
-    """Read GitHub CLI output; an API failure raises rather than passing validation."""
-    result = subprocess.run(
-        ["gh", *args], capture_output=True, text=True, check=False
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"gh {' '.join(args)} failed: {result.stderr.strip()}")
-    return result.stdout.strip()
+def plugin_manifest(plugin_dir: Path) -> dict:
+    """Return the plugin's manifest: root plugin.json first, then the Claude path.
 
-
-def plugin_version_at(repo: str, ref: str) -> str:
-    # Root plugin.json (Agent Plugins); older releases only have the Claude path.
-    """Read root/legacy manifest version at the selected remote release ref.
-
-    Failure to read either manifest blocks online validation; no inferred version."""
-    for path in ("plugin.json", ".claude-plugin/plugin.json"):
-        try:
-            raw = gh("api", f"/repos/{repo}/contents/{path}?ref={ref}",
-                     "--jq", ".content")
-        except Exception:
-            continue
-        return json.loads(base64.b64decode(raw).decode("utf-8"))["version"]
-    raise RuntimeError(f"no plugin.json in {repo} at {ref}")
+    Raises FileNotFoundError when neither exists and ValueError on invalid JSON."""
+    for candidate in (plugin_dir / "plugin.json", plugin_dir / ".claude-plugin" / "plugin.json"):
+        if candidate.is_file():
+            try:
+                return json.loads(candidate.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{candidate.relative_to(REPO_ROOT)} does not parse: {exc}")
+    raise FileNotFoundError("no plugin.json or .claude-plugin/plugin.json")
 
 
 def readme_version_for(plugin_name: str) -> str | None:
-    """Return the named plugin table’s version cell, or None if the row is missing."""
+    """Return the version cell of the plugin's README table row, or None if absent."""
     text = README.read_text(encoding="utf-8")
     match = re.search(
         r"^\|\s*\[`" + re.escape(plugin_name) + r"`\][^|]*\|\s*([^|]+?)\s*\|",
@@ -70,87 +59,77 @@ def readme_version_for(plugin_name: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
-def main() -> int:
-    """Validate marketplace contracts and return nonzero for collected failures.
-
-    Online mode also cross-checks pinned releases and is required by CI. --offline
-    is an explicitly weaker local feedback mode and cannot replace the online gate.
-    Validation is read-only; generated changes belong to bump-external-plugins.py."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--offline", action="store_true",
-        help="skip GitHub API checks (no version cross-reference)"
-    )
-    args = parser.parse_args()
+def check_claude_entries(data: dict) -> tuple[list[str], dict[str, str]]:
+    """Validate the Claude Code manifest; return (errors, {name: source path})."""
     errors: list[str] = []
-
-    try:
-        data = json.loads(MARKETPLACE.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
-        print(f"FAIL: marketplace.json does not parse: {e}")
-        return 1
-
+    sources: dict[str, str] = {}
     for entry in data.get("plugins", []):
         name = entry.get("name", "<unnamed>")
-        src = entry.get("source")
-        if not isinstance(src, dict) or src.get("source") != "github":
+        for field in FORBIDDEN_ENTRY_FIELDS:
+            if field in entry:
+                errors.append(f"{name}: forbidden top-level '{field}' field")
+        source = entry.get("source")
+        if not isinstance(source, str) or not RELATIVE_SOURCE.match(source):
+            errors.append(f"{name}: source must be a './plugins/<dir>' string, got {source!r}")
             continue
-
-        if "version" in entry:
-            errors.append(f"{name}: forbidden top-level 'version' field")
-        if "commit" in src:
-            errors.append(f"{name}: forbidden 'source.commit' field")
-
-        ref = src.get("ref")
-        sha = src.get("sha")
-        if not ref:
-            errors.append(f"{name}: missing or empty source.ref")
-        if not sha or not SHA_PATTERN.match(sha):
-            errors.append(f"{name}: source.sha is not a 40-char hex string")
-
-        if not ref or not sha:
+        sources[name] = source
+        plugin_dir = REPO_ROOT / source
+        if not plugin_dir.is_dir():
+            errors.append(f"{name}: source directory {source} does not exist")
             continue
-
-        repo = src.get("repo")
-        if not repo:
-            errors.append(f"{name}: missing source.repo")
+        try:
+            manifest = plugin_manifest(plugin_dir)
+        except (FileNotFoundError, ValueError) as exc:
+            errors.append(f"{name}: {exc}")
             continue
-
+        if manifest.get("name") != name:
+            errors.append(f"{name}: plugin.json name is {manifest.get('name')!r}")
+        version = manifest.get("version")
+        if not version:
+            errors.append(f"{name}: plugin.json has no version")
         readme_version = readme_version_for(name)
         if readme_version is None:
             errors.append(f"{name}: no README plugins-table row found")
+        elif version and readme_version != version:
+            errors.append(f"{name}: README version cell '{readme_version}' != plugin.json '{version}'")
+    return errors, sources
 
-        if args.offline:
-            continue
 
-        try:
-            expected_version = plugin_version_at(repo, ref)
-        except Exception as e:
-            errors.append(f"{name}: failed to resolve plugin.json at {ref}: {e}")
-            continue
-
-        if readme_version is not None and readme_version != expected_version:
-            errors.append(
-                f"{name}: README version cell '{readme_version}' "
-                f"!= plugin.json '{expected_version}' at {ref}"
-            )
-
-    claude_entries = {e.get("name"): e for e in data.get("plugins", [])}
-    agents_data = json.loads(AGENTS_MARKETPLACE.read_text(encoding="utf-8"))
+def check_codex_entries(agents_data: dict, claude_sources: dict[str, str]) -> list[str]:
+    """Each Codex entry must match a Claude Code entry and use a local source."""
+    errors: list[str] = []
     for entry in agents_data.get("plugins", []):
         name = entry.get("name")
-        claude_entry = claude_entries.get(name)
-        if claude_entry is None:
+        source = entry.get("source")
+        if name not in claude_sources:
             errors.append(f"{name}: in .agents marketplace but not the Claude one")
-        elif entry["source"].get("sha") != claude_entry["source"].get("sha"):
-            errors.append(f"{name}: .agents sha differs from the Claude entry")
+        elif not isinstance(source, dict) or source.get("source") != "local":
+            errors.append(f"{name}: .agents source must be {{'source': 'local', 'path': ...}}")
+        elif source.get("path") != claude_sources[name]:
+            errors.append(f"{name}: .agents path {source.get('path')!r} != {claude_sources[name]!r}")
+    return errors
+
+
+def main() -> int:
+    """Run all checks, print every failure, return nonzero if any. Read-only."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--offline", action="store_true",
+                        help="accepted for compatibility; checks never use the network")
+    parser.parse_args()
+    try:
+        data = json.loads(MARKETPLACE.read_text(encoding="utf-8"))
+        agents_data = json.loads(AGENTS_MARKETPLACE.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"FAIL: a marketplace manifest does not parse: {exc}")
+        return 1
+    errors, sources = check_claude_entries(data)
+    errors += check_codex_entries(agents_data, sources)
     if errors:
-        print("validate-marketplace: FAIL" + (" (offline)" if args.offline else ""))
+        print("validate-marketplace: FAIL")
         for err in errors:
             print(f"  - {err}")
         return 1
-
-    print("validate-marketplace: OK" + (" (offline)" if args.offline else ""))
+    print("validate-marketplace: OK")
     return 0
 
 
