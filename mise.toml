@@ -1,0 +1,15 @@
+min_version = "2026.11.8"
+
+[settings]
+# Install only through ./dev setup; never implicit.
+locked = true
+auto_install = false
+exec_auto_install = false
+not_found_auto_install = false
+lockfile = true
+
+[tools]
+# Every tool that ./dev ci calls is pinned here, so the Mac, CI and cloud sessions run the same versions.
+python = "3.13.18"
+shellcheck = "0.11.0"
+actionlint = "1.7.12"
