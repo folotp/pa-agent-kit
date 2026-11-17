@@ -1,0 +1,46 @@
+name: Release
+# Merging a plugin version bump is the release: tag <plugin>/v<version> and
+# open a DRAFT release. Publishing stays manual, after assets are attached
+# (release immutability makes a published release permanent).
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/**'
+      - '.claude-plugin/marketplace.json'
+  workflow_dispatch:
+    inputs:
+      base:
+        description: Commit before the change (releases the plugins whose version differs from it)
+        required: true
+      dry_run:
+        description: Print the plan; create no tag and no release
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+# One release run at a time: two runs must not tag the same version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Tag changed plugin versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE: ${{ github.event_name == 'push' && github.event.before || inputs.base }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          args=(--base "$BASE" --head "$GITHUB_SHA")
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          python3 scripts/release-plugins.py "${args[@]}"

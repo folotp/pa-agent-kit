@@ -7,7 +7,7 @@ Bump the in-repo `$1` plugin to version `$2`.
 
 ## When to use
 
-For in-repo plugin entries (entries whose `source` is a `./plugins/...` string). Not for external github-source plugins (those use `/bump-external-plugin`).
+For in-repo plugin entries (entries whose `source` is a `./plugins/...` string). Every plugin in this marketplace is in-repo. Merging the bump to `main` triggers the release workflow.
 
 ## Single source of truth
 
