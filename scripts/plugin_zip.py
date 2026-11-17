@@ -26,8 +26,13 @@ depend on the zlib build that compresses them, so equality is guaranteed for
 the same Python and zlib; across machines with different zlib versions, compare
 the file lists and contents (`unzip -l`) instead.
 
+Skill zips (`--skills`): one `<skill>.zip` per `skills/<skill>/` directory,
+with SKILL.md at the archive root, because hosts that import skills by hand
+(the Gemini app) accept skills, not plugins. Same selection and reproducibility
+rules; skill names must be unique across plugins when built into one directory.
+
 Usage:
-  scripts/plugin_zip.py [--ref REV] [--out DIR] [--list] [PLUGIN ...]
+  scripts/plugin_zip.py [--ref REV] [--out DIR] [--list] [--skills] [PLUGIN ...]
 Without plugin names every plugin in .claude-plugin/marketplace.json is built.
 Failure behavior: any malformed manifest, missing allowlist entry or escaping
 symlink exits nonzero before anything is written for that plugin.
@@ -140,8 +145,10 @@ def plugin_names(repo: Path, rev: str) -> list[str]:
     return [entry["name"] for entry in manifest.get("plugins", [])]
 
 
-def build(repo: Path, rev: str, name: str, out_dir: Path) -> Path:
-    """Write `<name>-v<version>.plugin` into `out_dir` from `rev` and return its path."""
+def collect(repo: Path, rev: str, name: str):
+    """Return (entries, version, files, payloads) for plugin `name` at `rev`.
+
+    `files` are the plugin-relative paths that ship; `payloads` maps each to its bytes."""
     prefix = marketplace_path(repo, rev, name)
     entries = tree_entries(repo, rev, prefix)
     manifest_rel = next((m for m in MANIFEST_NAMES if m in entries), None)
@@ -159,18 +166,48 @@ def build(repo: Path, rev: str, name: str, out_dir: Path) -> Path:
     files = select(set(entries), allowlist)
     if not files:
         raise PackageError(f"{name}: nothing to package")
-    payloads = {rel: resolve_symlink(repo, entries, rel) for rel in files}
-    out_dir.mkdir(parents=True, exist_ok=True)
-    archive_path = out_dir / f"{name}-v{version}.plugin"
-    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-        for rel in files:
-            info = zipfile.ZipInfo(rel, FIXED_TIME)
+    return entries, version, files, {rel: resolve_symlink(repo, entries, rel) for rel in files}
+
+
+def write_zip(path: Path, members: dict[str, tuple[bytes, bool]]) -> None:
+    """Write `members` (archive name -> (bytes, executable)) deterministically to `path`."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        for arc in sorted(members):
+            data, executable = members[arc]
+            info = zipfile.ZipInfo(arc, FIXED_TIME)
             info.create_system = 3
             info.compress_type = zipfile.ZIP_DEFLATED
-            executable = entries[rel][0] == "100755"
             info.external_attr = (0o100755 if executable else 0o100644) << 16
-            archive.writestr(info, payloads[rel], compresslevel=9)
-    return archive_path
+            archive.writestr(info, data, compresslevel=9)
+
+
+def build(repo: Path, rev: str, name: str, out_dir: Path) -> Path:
+    """Write `<name>-v<version>.plugin` into `out_dir` from `rev` and return its path."""
+    entries, version, files, payloads = collect(repo, rev, name)
+    path = out_dir / f"{name}-v{version}.plugin"
+    write_zip(path, {rel: (payloads[rel], entries[rel][0] == "100755") for rel in files})
+    return path
+
+
+def build_skills(repo: Path, rev: str, name: str, out_dir: Path) -> list[Path]:
+    """Write one `<skill>.zip` per skill of plugin `name`, with SKILL.md at the zip root.
+
+    This is the shape hosts that import skills one by one (the Gemini app) accept.
+    A skill is a directory `skills/<skill>/` holding a SKILL.md among the shipped files."""
+    entries, _version, files, payloads = collect(repo, rev, name)
+    skills = sorted({f.split("/")[1] for f in files
+                     if f.startswith("skills/") and f.count("/") >= 2 and f.endswith("/SKILL.md")
+                     and f.count("/") == 2})
+    paths = []
+    for skill in skills:
+        root = f"skills/{skill}/"
+        members = {f[len(root):]: (payloads[f], entries[f][0] == "100755")
+                   for f in files if f.startswith(root)}
+        path = out_dir / f"{skill}.zip"
+        write_zip(path, members)
+        paths.append(path)
+    return paths
 
 
 def main() -> int:
@@ -180,16 +217,21 @@ def main() -> int:
     parser.add_argument("--ref", default="HEAD", help="git revision to package (default HEAD)")
     parser.add_argument("--out", default="dist", help="output directory (default dist)")
     parser.add_argument("--list", action="store_true", help="print each archive's files")
+    parser.add_argument("--skills", action="store_true",
+                        help="build one <skill>.zip per skill (SKILL.md at the root) instead of the .plugin")
     args = parser.parse_args()
     try:
         for name in args.plugins or plugin_names(REPO_ROOT, args.ref):
-            path = build(REPO_ROOT, args.ref, name, Path(args.out))
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            print(f"{path}  sha256:{digest[:16]}")
-            if args.list:
-                with zipfile.ZipFile(path) as archive:
-                    for member in archive.namelist():
-                        print(f"  {member}")
+            out = Path(args.out)
+            paths = build_skills(REPO_ROOT, args.ref, name, out) if args.skills \
+                else [build(REPO_ROOT, args.ref, name, out)]
+            for path in paths:
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                print(f"{path}  sha256:{digest[:16]}")
+                if args.list:
+                    with zipfile.ZipFile(path) as archive:
+                        for member in archive.namelist():
+                            print(f"  {member}")
     except (PackageError, json.JSONDecodeError) as exc:
         print(f"plugin-zip: FAIL: {exc}")
         return 1

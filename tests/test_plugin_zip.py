@@ -110,6 +110,20 @@ class BuildTests(unittest.TestCase):
         with self.assertRaises(pz.PackageError):
             pz.build(self.repo, "HEAD", "alpha", self.out)
 
+    def test_skill_zip_has_skill_md_at_the_root(self):
+        paths = pz.build_skills(self.repo, "HEAD", "alpha", self.out)
+        self.assertEqual([p.name for p in paths], ["s.zip"])
+        self.assertEqual(self.names(paths[0]), ["SKILL.md"])
+
+    def test_skill_zips_respect_the_allowlist(self):
+        self.put("plugins/beta/skills/hidden/SKILL.md", "h")
+        self.put("plugins/beta/config/package-files.json",
+                 json.dumps([".claude-plugin/plugin.json", "skills/b"]))
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "hidden skill")
+        paths = pz.build_skills(self.repo, "HEAD", "beta", self.out)
+        self.assertEqual([p.name for p in paths], ["b.zip"])
+
     def test_unknown_plugin_fails(self):
         with self.assertRaises(pz.PackageError):
             pz.build(self.repo, "HEAD", "gamma", self.out)

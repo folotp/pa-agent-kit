@@ -121,8 +121,9 @@ def publish_plan(repo: Path, releases: list[Release], head: str) -> None:
              "--title", f"{release.plugin} {release.version}", "--generate-notes"],
             cwd=repo, check=True)
         with tempfile.TemporaryDirectory(prefix="plugin-zip-") as temp:
-            archive = plugin_zip.build(repo, sha, release.plugin, Path(temp))
-            subprocess.run(["gh", "release", "upload", release.tag, str(archive)],
+            assets = [plugin_zip.build(repo, sha, release.plugin, Path(temp))]
+            assets += plugin_zip.build_skills(repo, sha, release.plugin, Path(temp))
+            subprocess.run(["gh", "release", "upload", release.tag, *map(str, assets)],
                            cwd=repo, check=True)
 
 

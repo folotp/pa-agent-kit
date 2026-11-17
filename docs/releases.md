@@ -15,6 +15,8 @@ To preview what a run would do, start the workflow by hand: `gh workflow run rel
 
 The zip carries a plugin's payload with the plugin root at the archive root; it is how skills are loaded by hand in the Gemini app. Selection: the plugin's `config/package-files.json` when it exists (an allowlist of files and directories), otherwise every tracked file; development configuration (`.claude`, `.codex`, `.agents`, `.github`, `tests`) never ships. It is built from a git revision, not the working tree, so local files cannot leak in. Entries are sorted with fixed timestamps, so two builds of one commit give the same bytes on the same Python and zlib (across other zlib versions the compressed bytes may differ while the contents stay the same).
 
+The Gemini app accepts skills, not plugins (tested 2026-11-17: it refused a `.plugin`), so the release also gets one `<skill>.zip` per skill, with `SKILL.md` at the zip root. Build them with `--skills`.
+
 Build locally, any plugin and revision: `python3 scripts/plugin_zip.py --ref HEAD --out dist --list organon` (no names builds all four). If the upload step fails in a release run, the draft stays without its asset: build the zip with the command above at the tagged commit and `gh release upload <tag> <file>`.
 
 If a run fails halfway, rerun it: tags that already exist are skipped. Design and recovery notes: [protected-main.md](protected-main.md).

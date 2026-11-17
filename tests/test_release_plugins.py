@@ -87,8 +87,9 @@ class PlanReleasesTests(unittest.TestCase):
                 return real_run(cmd, **kwargs)  # local git is real; push and gh are not
             calls.append(cmd)
             if cmd[:3] == ["gh", "release", "upload"]:
-                with zipfile.ZipFile(cmd[4]) as archive:  # the asset exists when uploaded
+                with zipfile.ZipFile(cmd[4]) as archive:  # assets exist when uploaded
                     self.assertIn(".claude-plugin/plugin.json", archive.namelist())
+                self.assertEqual(sorted(Path(a).name for a in cmd[4:]), ["beta-v2.1.0.plugin"])
             return mock.Mock(returncode=0)
 
         releases = rp.plan_releases(self.repo, self.base, "HEAD")
