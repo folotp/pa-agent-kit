@@ -7,7 +7,7 @@
 | Source | Responsibility |
 |---|---|
 | `scripts/validate-marketplace.py` | Read-only structural check of both manifests against the plugin trees and the README table. No network. |
-| `.github/workflows/validate.yml` | Runs the unit tests and the validator. Its job name, `Marketplace validation`, is the required check on `main`; keep the two aligned. |
+| `.github/workflows/validate.yml` | Installs the pinned mise and tools, then runs `./dev ci` (unit tests, validator, shellcheck, actionlint: the checks listed in `harness.toml`). Its job name, `Marketplace validation`, is the required check on `main`; keep the two aligned. |
 | `scripts/release-plugins.py` | Plans (and, outside `--dry-run`, creates) the `<plugin>/v<version>` tag and draft release for each plugin whose version changed, then builds the plugin's `.plugin` zip with `scripts/plugin_zip.py` and uploads it to the draft. |
 | `.github/workflows/release.yml` | Runs `release-plugins.py` after a push to `main`, or by hand with `dry_run` on. |
 | `tests/` | Disposable-repository tests for the release planning. They never touch real tags. |
@@ -24,6 +24,6 @@ The release procedure and the `stable` pin are in [releases.md](releases.md).
 
 ## Maintenance and recovery
 
-Change the script, its tests, this page and `releases.md` in one PR. For a workflow change run `python3 -m unittest discover -s tests -v`, `python3 scripts/validate-marketplace.py`, and `actionlint`. Workflow files cannot be pushed by the bot Apps; PA releases that push.
+Change the script, its tests, this page and `releases.md` in one PR. For a workflow change run `./dev ci`, which includes `actionlint`. Tools come from `mise.toml`, never from the shell; see [harness-core.md](harness-core.md). Workflow files cannot be pushed by the bot Apps; PA releases that push.
 
 If a release run fails halfway, read the log, fix the cause and rerun the workflow: tags already created are skipped. A wrong tag with no published release can be deleted (`git push origin :refs/tags/<tag>`) and the draft release deleted with `gh release delete`; a published release cannot be changed once immutability is on, so ship a new version instead. Do not force-push `main` or remove protection to recover.
