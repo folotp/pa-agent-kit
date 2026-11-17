@@ -1,0 +1,78 @@
+name: Specs bump
+# Weekly: re-resolve the watched specifications (tools/specs/watch.json) and open a PR when
+# specs.lock changed. Runs `./dev specs update`, the only online step; every other check reads the
+# lock. See docs/harness-core.md, 'Spec tracking'.
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: specs-bump
+  cancel-in-progress: false
+jobs:
+  bump:
+    name: Bump specs.lock
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # push the bump branch
+      pull-requests: write # open the PR
+      actions: write # dispatch validate.yml: a PR opened with this token starts no CI run by itself
+    env:
+      MISE_VERSION: v2026.11.9
+      # sha256 of the linux-x64 binary, from SHASUMS256.txt of the mise release
+      MISE_SHA256: f13f3e5ec88807e0161669b3aa07a91d84478cdf1e95b5b92b63f85a25d42395
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true # the push below needs the job token
+
+      - name: Install pinned mise
+        run: |
+          set -euo pipefail
+          curl -fsSL -o mise "https://github.com/jdx/mise/releases/download/${MISE_VERSION}/mise-${MISE_VERSION}-linux-x64"
+          echo "${MISE_SHA256}  mise" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 mise "$HOME/.local/bin/mise"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install pinned tools
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./dev setup
+
+      - name: Resolve sources
+        run: ./dev specs update --summary "$RUNNER_TEMP/summary.md"
+
+      - name: Open the bump PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- specs.lock; then
+            echo "Nothing moved: no PR."
+            exit 0
+          fi
+          open="$(gh pr list --state open --json headRefName --jq '[.[] | select(.headRefName | startswith("specs-bump/"))] | length')"
+          if [ "$open" -gt 0 ]; then
+            echo "A bump PR is already open: merge or close it first. Upstream moves are picked up on the next run."
+            exit 0
+          fi
+          branch="specs-bump/$(date -u +%Y-%m-%d)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add specs.lock
+          git commit -m "chore: bump specs.lock"
+          git push origin "$branch"
+          {
+            echo "Weekly re-resolution of the watched specifications moved:"
+            echo
+            cat "$RUNNER_TEMP/summary.md"
+            echo
+            echo "Read the named pages, then merge if the plugins still pass. The check run on this PR comes from a dispatch of \`validate.yml\` on the branch."
+          } > "$RUNNER_TEMP/body.md"
+          gh pr create --base main --head "$branch" --title "chore: bump specs.lock ($(date -u +%Y-%m-%d))" --body-file "$RUNNER_TEMP/body.md"
+          # A PR opened with the job token starts no workflow; a dispatch is the documented exception.
+          gh workflow run validate.yml --ref "$branch"
