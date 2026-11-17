@@ -53,17 +53,17 @@
     },
     "codex-hooks": {
       "kind": "page",
-      "sha256": "94590d41e29e6f7c33418ce0094ef8c7e846a184f4c7cc942687e31b151442c6",
+      "sha256": "ba6ec7bfbeaa3ea23d2c030c6a69e4d5c98d32a79de094ea944d999eb8c7c57e",
       "url": "https://developers.openai.com/codex/hooks"
     },
     "codex-plugins": {
       "kind": "page",
-      "sha256": "fe6e403078cda9270400d7d2ce2d8451f04446d7761561324e048677a85e75e4",
+      "sha256": "94cf331f575f41594015beb6322fa01e6c30270049ddd159016e20d5881a7362",
       "url": "https://developers.openai.com/codex/plugins/build"
     },
     "codex-rules": {
       "kind": "page",
-      "sha256": "04a6482adc586ccd3b9b6480aceccb167335dac4ae9e338289e8be43c7b4767b",
+      "sha256": "6d875ac202d8f0ef54550962bdf53a2722933dabd01d4633c561659310930f6e",
       "url": "https://developers.openai.com/codex/rules"
     },
     "copilot-instructions": {
