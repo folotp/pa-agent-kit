@@ -22,7 +22,6 @@ use Python 3.9+ stdlib; managed checks require the repository's Python 3.11+ env
 | `hooks` | Native edit path normalization and all-destination installation preflight; caller owns recognized bodies and path policy |
 | `planning` | Declarative gate execution, complete Git diff, conservative impact selection and hosted baseline proof |
 | `specifications` | Reproducible baseline, explicit Claude profile and optional frozen-inventory audit |
-| `live_specs` | Current official revision/publication resolution, live schema/reference validation and provenance |
 
 Adapters provide repository paths, gates and policy; the SDK never guesses a sibling
 checkout or embeds vault, finance, protected-reference or marketplace rules. The
@@ -56,48 +55,15 @@ Official normative text: [Agent Skills](https://agentskills.io/specification),
 [Claude subagents](https://code.claude.com/docs/en/sub-agents), and
 [Agent Plugins](https://github.com/agentplugins/agent-plugins-spec).
 
-### Live authoritative specifications
+### Specification tracking
 
-`./scripts/dev spec-live` is a required gate on local full/index checks, PRs,
-main, scheduled/manual CI and release preflight. It reads
-`config/specifications.json`, resolves the official Agent Skills and Agent Plugins
-repositories' current HEADs online, reads the publisher's current-published-release
-statement, and downloads that version's schema from the resolved immutable revision.
-A higher working draft is not selected. There is no hard-coded latest version.
-
-It validates manifest fields against that newly fetched schema, using the schema's
-declared supported JSON Schema dialect. Claude mode reports its temporary current
-`$schema` envelope; it still does not certify a portable package layout. Skill
-metadata has only explicitly supported Claude extensions projected out and tool
-arrays normalized; unknown core fields reach the official validator. The current
-`skills-ref` is installed by uv from the newly resolved official commit into an
-isolated invocation environment and executes with credentials removed. This is
-upstream executable code from the configured official authority, not downloaded
-code treated merely as data. Official validator/dependency changes apply immediately;
-network, installation, changed API/schema or new requirement failures fail the gate.
-No pinned/cached success result substitutes; uv may cache immutable source/dependencies.
-
-The live authority catalogue also fetches current Agent Skills, AGENTS.md, Claude
-skills/plugin/subagent, Copilot instruction and Antigravity rule guidance. Prose-only
-sources are recorded with URL/hash and explicitly labelled semantic **MANUAL_REVIEW**.
-A fetched page proves availability, not automated natural-language compliance.
-Repository-specific instruction separation, naming and governance checks remain
-separate policy, not an invented official schema. Toolkit has no marketplace manifest:
-marketplace conformance is NOT APPLICABLE here; consumer marketplace adoption must
-use the relevant current official marketplace contract and its authoritative validator.
-
-CI retains `official-specifications-*` JSON artifacts with resolved revisions,
-published schema version, source URLs/hashes, adaptations, results and limits.
-`PA_SPEC_REPORT` selects an external receipt path; stdout also retains provenance.
-Receipts are evidence, never cross-run release attestations or skip authorization.
-
-The original pinned skills-ref/schema still supports reproducible local baseline
-validation and catches stricter repository policy. `spec-freshness` remains an
-optional frozen-inventory drift audit; `spec-review` reports candidate hashes without
-writing pins. Neither stands in for the required live check. Editorial changes to
-prose no longer require repinning merely to unblock CI; changes needing adapter or
-policy updates still require normal tests/docs/PR review. Do not auto-rewrite the
-legacy manifest, user invocation controls or protected content.
+The live resolver (`spec-live`, module `live_specs`) was removed in session 22. Upstream
+specifications are tracked by the committed `specs.lock`, validated offline and bumped by a
+weekly job: see `docs/harness-core.md`, 'Spec tracking'. The pinned `specifications` module
+above still supports reproducible local baseline validation; `spec-freshness` remains an
+optional frozen-inventory drift audit and `spec-review` reports candidate hashes without
+writing pins. Do not auto-rewrite the legacy manifest, user invocation controls or
+protected content.
 
 ## Selective CI trust and execution
 

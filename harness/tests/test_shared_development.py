@@ -111,7 +111,7 @@ class PlanningTests(unittest.TestCase):
         self.assertFalse(plan["full"])
         self.assertEqual(set(plan["skip"]), {"code", "tests"})
         self.assertTrue(
-            {"doctor", "specs", "spec-live", "links", "inventory", "package-contract"}
+            {"doctor", "specs", "links", "inventory", "package-contract"}
             <= set(plan["run"])
         )
 

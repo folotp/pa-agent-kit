@@ -82,12 +82,9 @@ Compatible full-main evidence permits conservative PR impact selection only.
 Release attestation reuse is not implemented; #20 cannot weaken exact-commit release verification.
 
 The baseline component gate checks strict YAML/JSON and repository/client policy.
-The required `spec-live` gate independently resolves the current official skills
-reference validator and published plugin schema online, records revisions/hashes and
-applies them to actual metadata/manifest fields. Vendored pins do not substitute for
-this live validation. Current prose-only authorities (including AGENTS.md) are fetched
-and identified as requiring semantic review; no fictional schema certification is
-claimed. See the [authoritative-spec contract](shared-devtools.md#live-authoritative-specifications).
+Upstream specifications are tracked by the committed `specs.lock` (repository root), which
+checks read offline and a weekly job bumps; the former live `spec-live` gate is removed. See
+`docs/harness-core.md`, 'Spec tracking'.
 #14's broader semantic skill audit remains separate.
 
 ## Claude Code cloud setup
@@ -255,7 +252,7 @@ Read the [SDK and CI contract](shared-devtools.md) for official skills-ref use,
 Claude versus portable profiles, reviewed online specification refresh, standalone
 wheel installation, conservative baseline proof and consumer adoption. Use
 `./scripts/dev spec-review` to inspect candidate hashes without changing pins;
-`./scripts/dev spec-live` resolves and validates current official contracts. The
+`specs.lock` records the current official contracts (see `docs/harness-core.md`). The
 frozen `spec-freshness` audit remains optional for baseline maintenance. Main/releases remain
 full. `./scripts/dev plan --base <SHA>` explains PR selection; unavailable compatible
 hosted baseline proof selects full validation.
