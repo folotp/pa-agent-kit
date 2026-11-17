@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "sources": {
+    "agent-plugins-repo": {
+      "kind": "git",
+      "revision": "6395e8906b30e2f333b792bfaa981d790993d56f",
+      "url": "https://github.com/agentplugins/agent-plugins-spec.git"
+    },
+    "agent-skills-repo": {
+      "kind": "git",
+      "revision": "83021e2be457a9b6679148719c1f6074f0ad975e",
+      "url": "https://github.com/agentskills/agentskills.git"
+    },
+    "agent-skills-spec": {
+      "kind": "page",
+      "sha256": "bf4137a702014f82a022de532e597c5f92ea86fb53fe29ea27bee3bbc1d19738",
+      "url": "https://agentskills.io/specification.md"
+    },
+    "agents-md": {
+      "kind": "page",
+      "sha256": "60ec51c226560aaf2c49a0b8a2452c8cf24459c37a816764979dc917076c7afb",
+      "url": "https://raw.githubusercontent.com/agentsmd/agents.md/main/README.md"
+    },
+    "antigravity-hooks": {
+      "kind": "page",
+      "sha256": "a9e0d0236a0b679ad9d7cd47e6c9543cf654f59253f9d6dd8289b5ba8d804a51",
+      "url": "https://antigravity.google/docs/hooks"
+    },
+    "antigravity-rules": {
+      "kind": "page",
+      "sha256": "aa09402f3aad0859d2c95d05c5529cbc9acbc636f615a35d68309d2eeb15cbce",
+      "url": "https://antigravity.google/docs/rules/"
+    },
+    "claude-agents": {
+      "kind": "page",
+      "sha256": "5466954a992870d13715b1e5a933a49bebba9ddcfee2e72f7a19b3e4aacc6990",
+      "url": "https://code.claude.com/docs/en/sub-agents.md"
+    },
+    "claude-plugin-marketplaces": {
+      "kind": "page",
+      "sha256": "09ca4f45324f12bfae726823b14c7b3c5bdd8f31261afe74c93691d2d21b4e1c",
+      "url": "https://code.claude.com/docs/en/plugin-marketplaces.md"
+    },
+    "claude-plugins": {
+      "kind": "page",
+      "sha256": "2cd1435b248ca3e037b0b62b2d4e6a720791829959483d6940c7c4e3596314ce",
+      "url": "https://code.claude.com/docs/en/plugins-reference.md"
+    },
+    "claude-skills": {
+      "kind": "page",
+      "sha256": "632e75ce5b55590853a15a1539dbfccfcd02e884a2acf93abc176c3356954fad",
+      "url": "https://code.claude.com/docs/en/skills.md"
+    },
+    "codex-hooks": {
+      "kind": "page",
+      "sha256": "94590d41e29e6f7c33418ce0094ef8c7e846a184f4c7cc942687e31b151442c6",
+      "url": "https://developers.openai.com/codex/hooks"
+    },
+    "codex-plugins": {
+      "kind": "page",
+      "sha256": "fe6e403078cda9270400d7d2ce2d8451f04446d7761561324e048677a85e75e4",
+      "url": "https://developers.openai.com/codex/plugins/build"
+    },
+    "codex-rules": {
+      "kind": "page",
+      "sha256": "04a6482adc586ccd3b9b6480aceccb167335dac4ae9e338289e8be43c7b4767b",
+      "url": "https://developers.openai.com/codex/rules"
+    },
+    "copilot-instructions": {
+      "kind": "page",
+      "sha256": "7b6d0c1bc13a32d8faf929d57fc9e39cee5da6138153f10f42206d6fa5b88c28",
+      "url": "https://docs.github.com/en/copilot/concepts/prompting-and-context/custom-instructions"
+    }
+  }
+}

@@ -37,11 +37,12 @@ Total imported: 5,662 lines. The core after this session is the new files only (
 | Verb | Effect |
 |---|---|
 | `setup` | Installs the locked mise tools (`mise install --locked`). The only verb that installs anything. |
-| `check` | Verifies that every tool named in `harness.toml` resolves under mise, and prints each version and path. |
-| `ci` | `check`, then every check listed in `harness.toml`, in order. Stops at the first failure. |
+| `check` | Verifies that every tool named in `harness.toml` resolves under mise, prints each version and path, then runs the repository's own offline `check` command if `harness.toml` names one. |
+| `ci` | The same tool verification and offline `check` command, then every check listed in `harness.toml`, in order. Stops at the first failure. |
 | `gate [<sha>]` | The read-only checks of the release gate ('Gate wrapper'). |
 | `apply`, `deploy` | The release, in a repository with a `[gate]` table; handed to `harness/gate` before any re-run. |
 | `x <command…>` | Runs any command under the pinned tools. |
+| `<verb> [args…]` | A verb the repository declares in the `[verbs]` table of `harness.toml` (here `specs`). Runs under the pinned tools; arguments reach the command as positional parameters. |
 
 Rules, from report 2.4:
 
@@ -59,9 +60,12 @@ profile = "plugin"                         # plugin | tool | house-code | live-c
 tools = ["python3", "shellcheck"]          # commands that must resolve under mise
 [checks]                                   # run in order by `./dev ci`, each through `bash -c`
 unit-tests = "python3 -B -m unittest discover -s tests -v"
+check = "python3 -B tools/specs/specs.py check"   # optional: one offline command for `./dev check` and `./dev ci`
+[verbs]                                    # optional: `./dev <name> [args…]`, same rules as a check
+specs = "python3 -B tools/specs/specs.py"
 ```
 
-Values are single-line strings or arrays of strings and may not contain double quotes or backslashes. `tools` lists command names as found on `PATH` (`python3`), not mise tool names (`python`). Repo-specific checks stay in the repository; `./dev ci` only runs what this file lists.
+`check` must contact nothing: it is what local hooks, PR runs and `main` runs share, so one commit gives one result everywhere. A verb name may not be one of the built-in verbs. Values are single-line strings or arrays of strings and may not contain double quotes or backslashes. `tools` lists command names as found on `PATH` (`python3`), not mise tool names (`python`). Repo-specific checks stay in the repository; `./dev ci` only runs what this file lists.
 
 ## Pins
 
@@ -255,3 +259,18 @@ This repository has no skills of its own yet: its two helpers are slash commands
 ## Path filters
 
 `validate.yml` keeps one always-running job, `Marketplace validation` (the required check). A `changes` job lists the plugins whose files differ from the PR base, and each plugin's own job runs only when its path changed; pushes to `main` and manual runs check every plugin. See `docs/protected-main.md`. This replaces the PR check planner of the imported Python harness and the per-agent acceptance matrix, which the core does not carry.
+
+## Spec tracking (`specs.lock`)
+
+Report 2.7. This repository follows upstream specifications (Agent Skills, Agent Plugins, `AGENTS.md`, the marketplace formats of Claude Code and Codex, the rules and hooks pages of Codex and Antigravity). The old resolver (`spec-live`) fetched them on every run, so an upstream edit turned an unrelated PR red and left no record. `specs.lock` replaces it.
+
+| File | Role |
+|---|---|
+| `tools/specs/watch.json` | The watch list: `git` sources (recorded by the commit their HEAD points to) and `pages` (recorded by the SHA-256 of the served bytes). Add or remove a source here, then run `./dev specs update`. |
+| `specs.lock` | The committed record, one entry per watched source, sorted, no timestamp. |
+| `tools/specs/specs.py` | `check` (offline) and `update` (online). Standard library only. |
+
+- **`./dev specs check`** runs in `./dev check` and `./dev ci`, so in the pre-commit hook, in PR runs and on `main`. It validates the lock against the watch list: same names, same URLs, well-formed digests. It opens no socket (a unit test forbids it). It cannot go red because upstream moved.
+- **`./dev specs update`** resolves every source and rewrites the lock if anything moved, printing what changed. It fails closed: if one source cannot be resolved, nothing is written. It reads no credential. Only the weekly job and a person run it.
+- A page hash moves on any edit upstream, editorial ones included. The bump PR's diff names the source; reading the page says whether it matters. Pages that a script renders client-side hash their served shell, not their text; treat a source that never moves, or moves every week, as a defect of the watch list.
+- `plugin.json` and marketplace entries are not validated against the locked schemas: the lock holds hashes, not contents. The checks of the plugins themselves stay in `scripts/validate-marketplace.py` and the path-filtered plugin jobs.

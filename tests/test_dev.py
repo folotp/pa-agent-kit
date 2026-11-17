@@ -152,5 +152,59 @@ class DispatcherTest(unittest.TestCase):
         self.assertIn("mise not found", result.stderr)
 
 
+class VerbsAndCheckTest(unittest.TestCase):
+    """The repository's own verbs ([verbs]) and its offline `check` command (harness.toml)."""
+
+    HEAD = 'profile = "plugin"\ntools = ["python3"]\n'
+
+    def test_verb_runs_under_mise_and_receives_its_arguments_verbatim(self):
+        fixture = FixtureRepo(
+            self, self.HEAD + '[checks]\nnone = "true"\n[verbs]\nshow = "printf \'<%s>\'"\n'
+        )
+        result = run_dev(fixture.dir, "show", "a b", "$HOME;x", env=fixture.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "<a b><$HOME;x>")
+
+    def test_verb_exit_status_is_the_commands(self):
+        fixture = FixtureRepo(self, self.HEAD + '[verbs]\nfail = "exit 7"\n')
+        self.assertEqual(run_dev(fixture.dir, "fail", env=fixture.env).returncode, 7)
+
+    def test_undeclared_verb_prints_usage(self):
+        fixture = FixtureRepo(self, self.HEAD + '[verbs]\nshow = "true"\n')
+        result = run_dev(fixture.dir, "other", env=fixture.env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("usage: ./dev", result.stderr)
+
+    def test_reserved_verb_names_and_non_strings_are_refused(self):
+        for text, message in (
+            (self.HEAD + '[verbs]\nci = "true"\n', "verb name is reserved: ci"),
+            (self.HEAD + '[verbs]\nx = "true"\n', "verb name is reserved: x"),
+            (self.HEAD + '[verbs]\nfoo = ["a"]\n', "a verb is a string"),
+        ):
+            with self.subTest(message):
+                fixture = FixtureRepo(self, text)
+                result = run_dev(fixture.dir, "check", env=fixture.env)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
+    def test_check_runs_the_repository_command_and_fails_with_it(self):
+        ok = FixtureRepo(self, self.HEAD + 'check = "echo OFFLINE-CHECK-RAN"\n')
+        result = run_dev(ok.dir, "check", env=ok.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("OFFLINE-CHECK-RAN", result.stdout)
+        bad = FixtureRepo(self, self.HEAD + 'check = "exit 5"\n')
+        result = run_dev(bad.dir, "check", env=bad.env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("check failed: exit 5", result.stderr)
+
+    def test_ci_runs_the_check_command_before_the_checks(self):
+        fixture = FixtureRepo(
+            self, self.HEAD + 'check = "echo OFFLINE-CHECK-RAN"\n[checks]\nfirst = "echo one"\n'
+        )
+        result = run_dev(fixture.dir, "ci", env=fixture.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertLess(result.stdout.index("OFFLINE-CHECK-RAN"), result.stdout.index("== first"))
+
+
 if __name__ == "__main__":
     unittest.main()
