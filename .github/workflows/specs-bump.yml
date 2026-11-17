@@ -18,7 +18,6 @@ jobs:
     permissions:
       contents: write # push the bump branch
       pull-requests: write # open the PR
-      actions: write # dispatch validate.yml: a PR opened with this token starts no CI run by itself
     env:
       MISE_VERSION: v2026.11.9
       # sha256 of the linux-x64 binary, from SHASUMS256.txt of the mise release
@@ -71,8 +70,6 @@ jobs:
             echo
             cat "$RUNNER_TEMP/summary.md"
             echo
-            echo "Read the named pages, then merge if the plugins still pass. The check run on this PR comes from a dispatch of \`validate.yml\` on the branch."
+            echo "Read the named pages, then merge if the plugins still pass. The required check comes from this PR's own run; if it shows as waiting for approval, a maintainer approves it (see docs/protected-main.md)."
           } > "$RUNNER_TEMP/body.md"
           gh pr create --base main --head "$branch" --title "chore: bump specs.lock ($(date -u +%Y-%m-%d))" --body-file "$RUNNER_TEMP/body.md"
-          # A PR opened with the job token starts no workflow; a dispatch is the documented exception.
-          gh workflow run validate.yml --ref "$branch"

@@ -11,9 +11,9 @@
     "claude-plugins": "https://code.claude.com/docs/en/plugins-reference.md",
     "claude-plugin-marketplaces": "https://code.claude.com/docs/en/plugin-marketplaces.md",
     "claude-agents": "https://code.claude.com/docs/en/sub-agents.md",
-    "codex-plugins": "https://developers.openai.com/codex/plugins/build",
-    "codex-rules": "https://developers.openai.com/codex/rules",
-    "codex-hooks": "https://developers.openai.com/codex/hooks",
+    "codex-plugins": "https://developers.openai.com/codex/plugins/build.md",
+    "codex-rules": "https://developers.openai.com/codex/rules.md",
+    "codex-hooks": "https://developers.openai.com/codex/hooks.md",
     "antigravity-rules": "https://antigravity.google/docs/rules/",
     "antigravity-hooks": "https://antigravity.google/docs/hooks",
     "copilot-instructions": "https://docs.github.com/en/copilot/concepts/prompting-and-context/custom-instructions"
