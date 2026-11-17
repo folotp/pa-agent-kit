@@ -1,0 +1,78 @@
+---
+name: organon-frontmatter
+description: Use when creating or drafting any Organon vault note, even without writing it, or composing or editing its frontmatter (path contains `Organon`). Schema, key ordering (Linter `yaml-key-priority-sort-order`), controlled vocabularies, ULID forward-only, creator dual-mode, archive/supersession, alias-only versioning, navigation fields for typed shapes (ADR/BL/BUG/INC).
+license: MIT
+compatibility: Requires the Organon MCP connector.
+---
+
+# organon-frontmatter
+
+**Canonical source:** `references/REGISTRE_KEYS.md` (Organon-owned — `[[Registre des clés de frontmatter]]` is PA's reading copy, not authoritative).
+
+**Language coherence** — governed by `organon-markdown-style` §Langue par dossier. Not duplicated here.
+
+## References
+
+| File | Load when |
+|---|---|
+| `references/VOCABULARIES.md` | Closed-enum value needed (12 absorbed enums + `type`, `status`, `content-model` lookups). |
+| `references/REGISTRE_KEYS.md` | Composing a structured note or unfamiliar key. |
+| `references/SHAPES_QUICKREF.md` | Creating a typed note (ADR, BL, BUG, INC, Person/Book/Quote, new ID). |
+| `references/PREFIXES.md` | Generating a new ID. |
+| `references/METHODOLOGY_ADR.md` | Creating/changing `status:` on ADR (VLT-ADR / SD-ADR / FIN-DEC). |
+| `references/METHODOLOGY_INC_BUG_BL.md` | Creating/changing `status:` on INC, BUG, or BL. |
+| `references/PROPERTIES.md` | Generic YAML syntax / property types (adapted from kepano; see `kepano-version.txt`). |
+
+## Key rules
+
+**Linter order** — `yaml-key-priority-sort-order` in `.obsidian/plugins/obsidian-linter/data.json`. `ulid:` sits between `id:` and `creator:`, not after `modified:`. Common keys in order: `title`, `aliases`, `description`, `type`, `content-model`, `lang`, `id`, `ulid`, `creator`, `created`, `modified`, `status`, `up`, `tags`. New key in Registre → also update `yaml-key-priority-sort-order`; else Linter falls back to alphabetical on next save.
+
+**Hand-ordering stays canonical.** Linter delegation via `execute_obsidian_command` was considered and isn't currently viable (not authorized, and the command targets Obsidian's active file, not a path) — see `references/REGISTRE_KEYS.md` § Linter delegation before reaching for it.
+
+**Write canonical** — atomic via `set_note_property` / `delete_note_property`, or `update_note_properties` for 2+ keys on one note (see `organon-vault-write` § Atomic-always). `patch_vault_file targetType:frontmatter` reserved for bulk reshape.
+
+**Read canonical** — atomic per-key via `get_note_property`; full-frontmatter via `get_note_properties` (see `organon-vault-read` rule 3). `get_vault_file_partial mode=frontmatter` reads one field, not the block.
+
+**`title:` Option C** — descriptive, human-readable. Notes with code: `"CODE — Titre descriptif"` (quote if contains `:` or `—`). `aliases:` carries code alone. Filename stays technical. Linter `yaml-title` disabled.
+
+**`ulid:`** — Crockford base32, 26 chars (`0–9 A–Z` minus `I L O U`), forward-only at creation. Always real value — never empty, placeholder or invented. Lost ULIDs unrecoverable. Draft with no template render → omit the key and say Templater fills it.
+
+**`creator:` dual-mode** — UI → `Pierre-André Folot`, no `source/ia` tag. New note via MCP → the product you are: Gemini writes `Gemini`, ChatGPT writes `ChatGPT`, Claude writes `Claude`; add `source/ia`. `Claude` from a template, prelude or copied skeleton is not a default for other agents: correct it before persisting. Editing an existing note → keep its `creator:`.
+
+**Drafts = full note.** New note, written or only drafted (writes unavailable or refused) → show the complete frontmatter block, not body alone. Same keys, order and rules as a written note.
+
+**`up:` on new notes** — always include, even in a draft: parent Index (e.g. `[[Index — Concepts]]` for `type: concept`), placed before `tags:`. No existing parent found → say so instead of dropping the key silently.
+
+**Links** — before using `[[target]]` in `up:` or another key, confirm the note exists with a vault search. Not found → omit it and say so; never invent a target.
+
+**`creator` vs `author`** — `creator` = Organon note author. `author` = external work's author (`type: book` only).
+
+**Archive** — `archived: true` + `archived-date: YYYY-MM-DD` (pair required; orthogonal to `status:`).
+
+**Supersession** — superseded note: `status: superseded` + `superseded-by: "[[…]]"` + `> [!warning] Superseded` callout at body top. New note: `supersedes: "[[…]]"` for ADR/FIN-DEC; general notes use typed body link (see `references/REGISTRE_KEYS.md`). `amends:` / `amended-by:` **deprecated** (2026-05-05, [[SD-ADR-011]]).
+
+**Alias-only versioning** (VLT-ADR-008) — stable short alias transferred between versions; no pointer note.
+
+**Tag namespaces** — prefixes inside `tags:` array, not top-level keys:
+```yaml
+tags:
+  - source/ia
+  - domain/tooling
+  - topic/methodology
+```
+`source: [ia]` / `domain: [tooling]` as root keys is wrong — not recognised by Linter, Smart Connections, or Bases.
+
+**Legacy namespaces** — `source/*`, `domain/*`, `topic/*`, `notetype/*` (legacy → `type:`), `statut/*` (legacy → `status:`). Allowlisted bare tag: `mcp-tools-prompt`.
+
+## Touch-on-edit (legacy migration, VLT-ADR-007)
+
+Editing a legacy note triggers normalisation: `shape:` → `content-model:`, `notetype/*` → `type:`, `#statut/*` → `status:`, `date created` → `created`, `author` → `creator`, `first-name` → `given-name`.
+
+- Max ~3 legacy keys per edit; beyond that, flag to PA.
+- Large edit (>10 lines) or PA says "minimal edit" → skip touch-on-edit, note debt.
+- Log: `Frontmatter normalisé : <legacy-key> → <canonical-key>` (one line per key).
+- Use atomic tools: one `update_note_properties` call (remove `<legacy>`, set `<canonical>`); fallback `delete_note_property{ key: <legacy> }` + `set_note_property{ key: <canonical>, value: <migrated> }`.
+
+## Governance
+
+New key order: `references/REGISTRE_KEYS.md` entry → `[[Registre des clés de frontmatter]]` reading copy → `yaml-key-priority-sort-order`.

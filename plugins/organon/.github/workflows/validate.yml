@@ -1,0 +1,55 @@
+name: Validate
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  # These matrix display names are required by GitHub main protection.
+  # Rename them only together with the server-side required contexts.
+  checks:
+    name: Checks (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Protected-reference comparison needs the actual PR/push base history.
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.13.7'
+          python-version: '3.11'
+      - name: Install shell tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y shellcheck shfmt jq zip unzip
+      - name: Install shell tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install shellcheck shfmt jq
+      - name: Validate
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        shell: bash
+        run: |
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            BASE_SHA="$(git rev-parse HEAD^)"
+          fi
+          ./scripts/dev check --base "$BASE_SHA"
+      # Runtime package selection stays in Organon; release orchestration stays
+      # in this exact merged toolkit revision. The ignored checkout keeps source clean.
+      - name: Check out shared packager
+        uses: actions/checkout@v4
+        with:
+          repository: folotp/pa-toolkit
+          ref: a56f1803914682b965444cbf0bf030d2fd41229e
+          path: .tooling/pa-toolkit
+      # Build/check temporary archives and an explicit receipt; never publish from CI.
+      - name: Verify release archive
+        run: |
+          python3 .tooling/pa-toolkit/skills/plugin-release/scripts/release.py . \
+            --dry-run --output "$RUNNER_TEMP/organon-package" \
+            --result "$RUNNER_TEMP/organon-release-result.json"

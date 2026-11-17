@@ -1,0 +1,33 @@
+# Archives plugin/skill (binaires packagés)
+*.plugin
+*.skill
+
+# Espaces de travail eval
+eval-workspace/
+eval-workspace-iter2-cmp/
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Snippets (générés, non-source)
+snippets/
+
+# Backups
+*.bak
+
+# Claude Code per-user settings (personal permission allowlist, never shared)
+.claude/settings.local.json
+
+# Scoped-token bypass for absorbed-content re-sync flows. Created by the
+# kepano-resync / vault-resync skills mid-flow, removed after the edit
+# batch. The pre-commit hook refuses to commit while it exists.
+.organon-resync-token
+.venv/
+dist/
+
+# CI checkout of the pinned shared release implementation
+.tooling/

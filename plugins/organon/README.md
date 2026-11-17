@@ -1,0 +1,268 @@
+# organon
+
+Organon vault conventions for AI agents — packaged as a portable plugin of [Agent Skills](https://agentskills.io/specification) for Claude, ChatGPT and Gemini.
+
+## Development
+
+Start with [the shared development workflow](docs/development.md) and `AGENTS.md`. Claude Code, Codex, other agents, and humans use the same checks. Release packaging follows [the release runbook](docs/release.md). For implementation ownership, CI flow and safe modification procedures, read [the maintainer architecture](https://github.com/folotp/organon-plugin/blob/main/docs/development-architecture.md).
+
+## What this plugin provides
+
+Eight description-triggered skills (load automatically when working with the Organon Obsidian vault at `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Organon`) plus one Claude-only slash command. Each agent uses its own Organon connector (`mcp-tools-istefox` ≥ 3.3.0) for the remote Obsidian MCP server; Claude\'s is the claude.ai-hosted connector at `https://organon-claude.folot.net/mcp` — no bundled `.mcp.json`; Cloudflare Access OAuth runs in the browser on first connect.
+
+### Core (5 skills)
+
+- **organon-vault-write** — MCP write discipline via `mcp-tools-istefox` ≥ 3.3.0. Atomic-always frontmatter writes (`set_note_property` / `delete_note_property` / `update_note_properties`), Templater-first routing to active domain-parameterised templates (auto-id shapes BL/BUG/INC/ADR via render-then-create; title-named Note/Concept/Person/Book/Quote/Index/Organization one-step), `search_and_replace` for scoped regex edits, link-safe `rename_heading` / `rename_vault_file`, heading-patch safety incl. the still-active fenced-code H2 trap (VLT-BUG-0022), EJS-literal-in-JS-comment Templater invariant, NFC normalization.
+- **organon-vault-read** (new in v1.1.0) — Read-side token-minimisation. Decision tree across atomic frontmatter (`get_note_property`), partial reads (`get_vault_file_partial` modes: frontmatter / heading / block / outline), graph nav (`get_backlinks`, `get_outgoing_links`), tag and property indexes (`list_tags`, `get_files_by_tag`, `list_property_values`), search (`search_vault_smart` → `search_vault_simple` fallback, `execute_dataview_query` in-process, `search_vault` DQL/JsonLogic), `get_recent_files`. Reserves full `get_vault_file` for cases where the whole body is genuinely required.
+- **organon-frontmatter** — Schema, key ordering, controlled vocabularies, ULID forward-only, `creator:` dual-mode (UI vs MCP), archive/supersession, alias-only versioning, ADR/BL/BUG/INC field requirements. Vocabularies externalized to `references/VOCABULARIES.md` (loaded on-demand).
+- **organon-markdown-style** — Body conventions: no H1 in body, language by folder (`99 - Méta/AI/` in EN, rest in FR), typographic apostrophes, no trailing whitespace, no systematic block anchors, table+block-ref pitfall.
+- **organon-session-discipline** — 9 behavioral rules: arbitrate over over-clarify, read bootstrap before drafting, no in-fiche redundancy, confirm inferred mappings, propose generalizations, check meta-skills before producing typed artifacts, language coherence by folder, semantic pre-filter before exploratory reads (Rule 8, new in v1.1.0), test-framework temp dirs outside the vault mount.
+
+### Aux (3 skills, new in v0.2.0 — chat 1.B)
+
+- **organon-bases** — Bases-default policy (Dataview is fallback only with explicit auth, even against directive prompts), Excluded-files trap diagnostic, dv-light optimised config, Organon vocabulary filters.
+- **organon-canvas** — Purpose discriminator (cartography of existing notes vs. freeform sketches), placement beside the domain, file-node filename-only paths for vault-move robustness, language by folder for labels, ID convention (kepano 16-char hex).
+- **organon-diagramming** — Tool-selection decision tree (Mermaid for code-expressible flows, Canvas for note-cartography, Excalidraw via connector+bridge for freeform, SVG for throwaways), Excalidraw bridge skeleton, plugin compression-OFF invariant, preview-before-persist pattern.
+
+### Claude-only command (`disable-model-invocation: true`)
+
+Releases moved out of this plugin: they are cut with `/pa-toolkit:plugin-release` from [`folotp/pa-toolkit`](https://github.com/folotp/pa-toolkit), the single generalized release runbook for all of PA's plugins (it was `/plugin-release` here from v0.4.1).
+
+- **organon-memory-audit** (`/organon-memory-audit`, since v0.5.0) — Three-pole drift audit aligning plugin/skill/tool reality, the canonical-snippets vault note, and per-surface implementations (Code / Cowork / Chat). Optional instruction-quality checks (`--checks=drift|quality|all`) cover orientation files, progressive disclosure in `organon-*` skills, and rule quality for Claude-5-generation models. Two scope modes (`--scope=global|project|all`) and two interaction modes (`--mode=interactive|report-only`). Edits never auto-applied — findings are raised for per-item human-in-the-loop approval.
+
+## Absorbed kepano content — version-pin model (since v1.0.0)
+
+This plugin carries 9 adapted references derived from [kepano `obsidian-skills`](https://github.com/kepano/obsidian-skills) for generic Obsidian syntax. One upstream sha is pinned in `kepano-version.txt`; the pin records the source version; local adaptations are not byte-equivalent to upstream. Check: `./scripts/kepano-check-upstream.sh` (compares pin vs upstream HEAD). Refresh runbook: [`docs/refreshing-kepano.md`](docs/refreshing-kepano.md).
+
+The pre-v1.0.0 design used per-section `body_sha256` fingerprints in `kepano-sync.json` plus a bidirectional drift detector + a `/kepano-resync` runbook. The version-pin model is ~95% cheaper to maintain (1 line vs a 9-section ledger; 65-LoC check script vs 317 LoC) at the cost of less granular drift reporting — for casual refresh cadence, the tradeoff is right-sized.
+
+## Organon-owned reference content (was: absorbed vault content, retired v1.0.0)
+
+`organon-frontmatter/references/` carries the canonical frontmatter key registry (`REGISTRE_KEYS.md`), ID prefix registry (`PREFIXES.md`), 12 controlled vocabularies (sectioned inside `VOCABULARIES.md`), and the methodology references (`METHODOLOGY_ADR.md`, `METHODOLOGY_INC_BUG_BL.md`). The plugin is now the **canonical home** for this content — edit it here directly. (Prior to v1.0.0 these files were absorbed verbatim from PA's local Organon vault with bidirectional drift tracking; the bidirectional contract was retired because the vault is PA's own, not a third-party upstream.)
+
+Net effect: when `organon-frontmatter` triggers (drafting an ADR / VLT-BUG / FIN-DEC), the schema, vocab, and methodology are already in `references/` — no MCP round-trip to the vault needed.
+
+## Empirical validation
+
+- **Chat 1.A — 4 core skills** : 3 iterations of skill-creator eval workflow. iter-3 final pass-rate **94 %** with_skill vs 82 % baseline (delta +12 pp).
+- **Chat 1.B — 3 aux skills + B1 fix** : 2 iterations. iter-2 final pass-rate **98 %** with_skill (54/55) vs 78 % baseline (43/55) — delta **+20 pp**, 0 regressions, 11 with_skill-only wins.
+- Detailed results in `refactor-phase4/wave-1-skills-bootstrap/eval-workspace/` of the Organon project workspace.
+
+## Changes since v0.1.0
+
+Historical record: each entry cites paths and components as they were at that release, and many have since been retired.
+
+### v1.5.5 (Subagent fixes and memory-audit cleanup)
+
+- The memory audit drops the retired Cowork store and the Chat/Cowork split (#124).
+- Plugin-source availability is based on the resolved plugin root (#124).
+- Release subagents: stale facts and word caps fixed (#127).
+- Docs: the project CLAUDE.md names the cloud tool prefix (#125).
+
+### v1.5.4 (Adaptive tool loading)
+
+- Adaptive tool loading procedure with per-tool fallbacks (#120).
+- `rename_tag` fallback is boundary-safe (#122).
+- The token harness runs via uv; pip is dropped (#118).
+- Docs: the project CLAUDE.md uses Markdown headings (#114).
+
+### v1.5.3 (Draft frontmatter and write refusal)
+
+- Drafts now require `up:` and the full frontmatter (#111, refs #75).
+- The write-refusal wording is tighter (#111).
+- Docs: retired VLT references now point at Pièges connus or an ADR (#110).
+
+### v1.5.2 (Author subagent fixes)
+
+- `organon:canvas-author` can now read vault notes.
+- Both author subagents re-read in sections when a read comes back cut short.
+- The bases runbook's example view name is in French.
+- Tested in headless Claude Code on the branch with a prompt naming the subagent; installed builds not yet tested.
+
+### v1.5.1 (Bases and canvas dispatch)
+
+- **Dispatch**: the `organon-bases` and `organon-canvas` skills now dispatch their subagent first and fall back to the runbook when no subagent is available. Before this, Claude could read the runbook in the main session and never delegate. Tested with the Bases prompt in headless Claude Code on the branch; canvas dispatch and installed builds not yet tested.
+
+### v1.5.0 (Agent Skills conformance, agents/ packaging fix, cross-agent creator)
+
+- **Agent Skills**: all 8 skills conform to the Agent Skills spec (#75).
+- **Manifest**: root `plugin.json` is now the version source and follows Agent Plugins 1.0.0; `.claude-plugin/plugin.json` is a symlink to it.
+- **Subagents**: moved to `agents/`, which fixes them not loading from the installed plugin.
+- **`organon-memory-audit`**: now a Claude-only command.
+- **Creator**: `creator` accepts ChatGPT and Gemini, and the skills tell each agent to use its own name. Gemini still wrote `Claude` in some tests, and templates still hard-code it.
+- **Triggers**: `organon-frontmatter` now covers creating or drafting a note.
+- **Link targets**: new rule telling agents to confirm a link target exists before using it. It's guidance, not an automated check.
+- **Bases**: sort documented in `organon-bases`.
+
+### v1.4.0 (memory-audit instruction-quality checks, connector corrections)
+
+- **`organon-memory-audit`** (#73): new `--checks=drift|quality|all` flag and Bucket 5 for instruction quality, covering orientation files, `organon-*` skills and rule classification. Default stays `drift`. Catalogue in `references/QUALITY_CHECKS.md`.
+- **Executor**: gains vault read tools and runs on the unversioned `opus` alias. The per-item walk moved to `SKILL.md`; the executor stays read-only.
+- **Connector corrections** (#74): `document-map` replaces `outline`; `get_vault_file_partial` takes `filename`; `createFile` and `dry_run` are booleans; periodic-note, daily-note and active-file tools are marked unavailable.
+- **Skills** (#74, #76): conflicts on block-ref IDs and new-key order resolved; Templater invariants merged into `organon-vault-write`; tables of contents on long references; `author` scoped to `type: book`; bases and canvas descriptions cover creation.
+- **`organon-session-discipline`** (#76): the 3-read budget and the rule 6 undertriggering rationale are removed.
+- **Release** (#70): `/plugin-release` moved to `/pa-toolkit:plugin-release`.
+- **Docs** (#72): Organon connector docs point at `organon-claude.folot.net`.
+
+### v1.3.3 (pole-3 memory model fix, connector doc drift cleanup)
+
+- **Connector switch** (#64): uses the claude.ai-hosted Organon connector; redundant `.mcp.json` dropped.
+- **`organon-memory-audit`** (#66): corrected the pole-3 model for shared Chat/Cowork memory.
+- **Docs**: routed `Supersede-ADR-template.md`, fixed the FIN-DEC row in `SHAPES_QUICKREF` (#65); corrected stale `.mcp.json` bundling claims.
+- **Packaging** (#60): `.venv/` excluded from the `.plugin` archive.
+- **Chore**: rule-rewriter pass over `CLAUDE.md`, `SKILL.md` files, agents and commands.
+
+### v1.3.2 (tool documentation, token recovery, connector audit)
+
+- **`canvas-author`** (#55): granted the MCP canvas tools it already documented.
+- **Kepano** (#52, #54): pin refreshed to `a1dc48e`.
+- **Tool loading** (#58): persisted vs on-demand MCP tools classified in `docs/mcp-tool-loading.md`.
+- **Performance** (#57): token-harness regression recovered.
+- **Connector audit** (#56): floor bump, new tools, telemetry fixes.
+
+### v1.3.1 (MCP packaging fix — nest + rename)
+
+- **`.mcp.json` switched to the plugin (top-level) server-map shape**, dropping the project-style `mcpServers:` wrapper. The wrapper made Claude Code list the server as a standalone entry; the top-level map nests it under the `organon` plugin in `/plugin` (matching e.g. the GitHub plugin).
+- **Server key renamed `mcp-tools-istefox` → `organon`.** The connector is still `istefox/obsidian-mcp-connector`; `organon` is just the bundled-server identity. Tool prefix is therefore `mcp__claude_ai_organon__*`.
+- **All skill references + the local allowlist updated** from the old `mcp__mcp-tools-istefox__*` to `mcp__claude_ai_organon__*`. (Plugin-bundled MCP tools are always namespaced `mcp__plugin_<plugin>_<server>__<tool>` — the v1.3.0 references were stale.)
+
+### v1.3.0 (bundled remote MCP server)
+
+- **Plugin now ships the MCP server config.** New root `.mcp.json` declares the remote Obsidian MCP server as a Streamable-HTTP endpoint at `https://obsidian-mcp.folot.net/mcp` (`istefox/obsidian-mcp-connector`, exposed via a named cloudflared tunnel). Consumers no longer configure the connector themselves — Cowork / Claude for Excel can reach it, and Claude Code picks it up automatically.
+- **Auth is Cloudflare Access OAuth (OIDC).** Browser flow on first connect; no token in the config. The origin Bearer is injected at the Cloudflare edge (Transform Rule), transparent to the client.
+- Claude Code (loopback OAuth callback) requires its redirect URI to be whitelisted in the Cloudflare Access OAuth app; claude.ai / Cowork already work.
+
+### v1.1.0 (mcp-tools-istefox 0.7.0 refactor + caveman compression)
+
+- **Connector floor bumped 0.4.5 → 0.7.0.** Skills now leverage the post-0.4.5 tool surface: atomic frontmatter props (`set_note_property`, `get_note_property`, `delete_note_property`, `list_property_values`), partial reads (`get_vault_file_partial` modes frontmatter / heading / block / outline), link-safe rename (`rename_heading`, `rename_vault_file`), in-process Dataview (`execute_dataview_query`, 0.7.0+), periodic notes (`get_or_create_periodic_note`, `append_to_periodic_note`), graph nav (`get_backlinks`, `get_outgoing_links`), tag and property indexes (`list_tags`, `get_files_by_tag`).
+- **New `organon-vault-read` skill** — read-side counterpart to `organon-vault-write`. Decision tree routes every read to the cheapest tool that returns enough information; full `get_vault_file` is the last resort. Reference matrix in `references/READ_TOOL_MATRIX.md`.
+- **Atomic-always for frontmatter writes.** `set_note_property` / `delete_note_property` are the canonical path; `patch_vault_file targetType:frontmatter` is reserved for bulk reshape. Safer (no full-frontmatter revalidation footgun) and cheaper (single-key payload).
+- **Rule 8 — semantic pre-filter** added to `organon-session-discipline`. Closes issue #34. Before any exploratory `get_vault_file`, `search_vault_smart` returns the top-K candidate paths; only the top 1-3 get partial-read.
+- **Canonical template paths** added to `organon-vault-write` for both static gabarits (BL/BUG/INC/ADR/SD-BL) and active Templater shapes (Note/Concept/Person/Book/Quote/Index/Organization + 3 domain specials). Closes issues #33 and #35.
+- **Documented active bugs.** Heading-replace traverses H2 boundaries inside fenced code blocks (VLT-BUG-0022, closes #37). EJS literals interpreted inside JS comments (closes #38).
+- **Updated YAML-quoting rationale** — patch-side LRA revalidation footgun retired in 0.4.x; partial-read parser still strict. Closes issue #36.
+- **Caveman-compressed every skill body and reference.** Prose-only compression — frontmatter `description:` fields, code, tables, file paths, MCP tool names, wikilinks all preserved verbatim. Closes issue #40.
+- **Harness extended.** S11-S13 measure atomic-frontmatter writes, partial reads, and the Rule 8 semantic pre-filter. New `organon-vault-read` row in the skill classification.
+
+### v1.0.0 (absorption overhaul — major token-cost reduction)
+
+- **Vault-side absorption pattern retired.** The Organon vault is PA's own — bidirectional drift detection was over-engineered. `vault-sync.json`, `scripts/sync-vault.sh`, `skills/vault-resync/`, `vault-resync-orchestrator`, `commands/vault-resync.md`, and `docs/syncing-vault.md` are gone. The 14 previously-absorbed references (REGISTRE_KEYS, PREFIXES, VOCABULARIES sections, METHODOLOGY_ADR, METHODOLOGY_INC_BUG_BL) are now plain Organon-owned content. **Breaking: `/vault-resync` no longer exists.**
+- **Kepano absorption simplified to a version-pin model.** `kepano-sync.json` and the 317-LoC `scripts/sync-kepano.sh` are replaced by a one-line `kepano-version.txt` and the 65-LoC `scripts/kepano-check-upstream.sh` (`git ls-remote` comparison only). `skills/kepano-resync/`, `kepano-drift-resolver`, `kepano-resync-orchestrator`, `commands/kepano-resync.md`, `docs/syncing-kepano.md` retired. Refresh runbook: `docs/refreshing-kepano.md`. The 9 absorbed references remain pinned to the same upstream sha but are now AI-slim adaptations rather than verbatim copies. **Breaking: `/kepano-resync` no longer exists.**
+- **SessionStart drift-check hook removed.** Lived in the source repo's `.claude/settings.json` (never shipped in the plugin — consumer sessions never saw it). Replaced by the pre-commit hook + `release-readiness` Gate 2.
+- **AI-slim rewrite of all model-facing prose.** 11 SKILL.md frontmatter descriptions trimmed; 10 agent frontmatter descriptions trimmed; 24 SKILL.md bodies and references rewritten as terse English bullets/tables. ~5,200 chars cut from discovery descriptions (~1,300 tokens saved per session of every surface). References ~140 kB → ~78 kB (-44 %). SKILL.md bodies ~29 kB → ~16 kB (-45 %).
+- **`organon-bases` and `organon-canvas` become dispatch shims.** SKILL.md goes from 6.7 kB / 6.5 kB to 1.6 kB / 1.6 kB. The full author runbooks + lazy-load of absorbed refs move into two new sonnet-pinned agents: `bases-author`, `canvas-author` (co-located under `skills/organon-bases/` and `skills/organon-canvas/`, symlinked from `.claude/agents/`). `organon-frontmatter` intentionally stays inline (too high-frequency, refs already strictly gated).
+- **CLAUDE.md trimmed.** 7.0 kB → 2.6 kB. Operational detail moved to `docs/contributor-notes.md` (resync-token lifecycle, tooling floor) and `docs/hook-scope.md` (hook-scope audit recipe).
+- **Token harness (iteration 4) verdict: PASS.** `mean_ratio` 1.509 → **3.485** (target ≥ 2.15). `post_tokens_total` (main opus context) **61,080 → 24,561 (−60 %)**. S04–S06 (bases/canvas sessions) post-tokens drop 78–95 % thanks to dispatch.
+- **Surface counts:** 9 skills (was 11), 2 user-only commands (`/plugin-release`, `/organon-memory-audit` — was 4), 5 general-purpose agents + 4 skill-co-located executor/author agents.
+
+### v0.6.2 (sub-agent cost optimisation)
+
+- **Mechanical user-only skills now delegate to sonnet-pinned executor sub-agents instead of running inline on the main session.** The four `disable-model-invocation: true` skills with mechanical, deterministic runbooks (`plugin-release`, `kepano-resync`, `vault-resync`, `organon-memory-audit`) become thin shims that dispatch to a dedicated executor agent as their first and only action. The runbook bodies (~100–270 lines each) move from `SKILL.md` to `.claude/agents/<name>.md` verbatim — the cost reduction is the model swap, not a content rewrite. Frontmatter `name:` / `description:` / `disable-model-invocation: true` on the source skills is preserved byte-for-byte so trigger discovery, picker presence, and the slash-command wrappers continue to behave identically.
+- **Four new executor agents under `.claude/agents/`** (all `model: sonnet`, dev-time only, not advertised in description-triggered discovery):
+  - `plugin-release-executor` — post-pre-flight ship sequence (version bump, archive, tag, push, GitHub release). Since moved to `pa-toolkit`.
+  - `kepano-resync-orchestrator` — full kepano re-sync runbook; fans out to `kepano-drift-resolver` per drifted section; owns the `.organon-resync-token` lifecycle.
+  - `vault-resync-orchestrator` — full vault re-sync runbook; owns the resync-token lifecycle for vault-absorbed paths.
+  - `memory-audit-executor` — read-only three-pole audit; emits structured four-bucket findings.
+- **Six existing agents now have explicit `model:` pins** — read-only auditors (`markdown-link-validator`, `readme-inventory-checker`, `release-readiness`, `token-harness-regression`) on `haiku`; editors/orchestrators (`kepano-drift-resolver`, `changelog-synthesizer`) on `sonnet`. Replaces the previous implicit "inherit from parent" default that billed at the parent session's model (typically opus).
+- **New PreToolUse routing hook** `scripts/hooks/enforce-skill-delegation.sh` (registered in `.claude/settings.json`, matcher `"Skill"`, timeout 5 s). When one of the four delegation-mandatory skills fires, emits a stdout reinforcement block naming the executor + agent file path so the model's next turn sees an explicit routing directive, plus a stderr audit line. Never blocks (exit 0) — hard-blocking the Skill tool would break the shim flow itself, since the shim still dispatches the executor via the Agent tool from inside the Skill turn. The hook is a third reinforcement on top of the shim's BLOCKING REQUIREMENT paragraph and the skill's `disable-model-invocation: true` frontmatter.
+- **Behavioural impact for end-users: none.** Same 11 skills, same 4 commands, same surface. The delegation is internal — visible only in `/agents` and in the per-skill billing trace. Trigger keywords, absorbed-content shas, and runbook semantics all unchanged.
+- Breaking: no — internal cost-optimisation refactor with no user-facing surface change.
+
+### v0.6.1 (resync flow hardening + automation tooling)
+
+- **Resync flow now works end-to-end without bypass tricks.** A new `.organon-resync-token` file (gitignored, audit-logged via stderr) lets the model edit absorbed-content `target_file` paths under the supervision of the existing PreToolUse `block-absorbed-edits.sh` hook. Pre-commit refuses to commit while the token exists — silent leakage is impossible. Both `kepano-resync` and `vault-resync` skills, plus the `kepano-drift-resolver` subagent, document the lifecycle.
+- **Bilateral drift verification.** `sync-kepano.sh` and `sync-vault.sh` now hash BOTH the source-side chain (vault/upstream extract → stored sha) AND the target-side chain (plugin target body inside `<!-- *-* -->` markers → stored sha). New statuses `target-corrupt`, `target-marker-missing`, `target-file-missing` surface when a hand-edit slipped past the hook. JSON output gains `detected_target_sha256` + `detected_target_status`.
+- **New `vault-resync` skill (`/vault-resync`)** — end-to-end runbook mirroring `kepano-resync` for vault-side absorption. User-only.
+- **CI: marketplace dispatch on release.** New `.github/workflows/notify-marketplace.yml` fires `repository_dispatch` at `folotp/claude-marketplace` on every `release: published`, triggering its `auto-bump-external-plugins` workflow within ~30 s instead of the up-to-30-min cron.
+- **Local tooling.**
+  - `scripts/hooks/install-git-hooks.sh` installs a managed `.git/hooks/pre-commit` that runs both drift detectors and refuses on token presence. Closes the asymmetry between Claude's PreToolUse hook (in-session edits only) and direct commits from other editors.
+  - `scripts/hooks/stop-shellcheck.sh` is a Stop hook that lints modified `scripts/**/*.sh` at session end. Works on macOS default bash 3.2 (no `mapfile` dependency).
+  - Two new subagents under `.claude/agents/` (dev-time only, not shipped in the plugin runtime): `readme-inventory-checker` (read-only consistency check between `README.md` and source-of-truth files) and `token-harness-regression` (PR-time harness diff against latest committed iteration).
+- **Vault re-sync.** `domain` vocabulary FIN row updated to reflect the 2026-05-08 FIN-BL Templater dual-mode rollout.
+- **Cleanup.** Shellcheck SC2034 + SC2295 findings silenced across all 7 bash scripts. `MARKDOWN_SYNTAX.md` had a stray extra blank line in its marker layout (caught by the new bilateral verifier; corrected).
+- Breaking: no — additive infrastructure. Existing skill descriptions, trigger keywords, and absorbed content shas stable.
+
+### v0.6.0 (perf trim — token-efficiency pass)
+- **Core SKILL.md trim** (~−21.5 % across the 7 skills): bulky tables, skeletons, and verbose example blocks moved out of the always-loaded core into lazy-loaded `references/`. Net effect on the harness: `post_tokens_total` 67 257 → 61 080 (−9.2 %), `mean(ratio)` 1.464 → 1.509. Real-world per-session load drops 600–1700 tokens depending on how many skills trigger.
+- **Five new `references/` files** (lazy-loaded only when the task genuinely needs them):
+  - `organon-frontmatter/references/SHAPES_QUICKREF.md` — required-fields-by-shape (ADR/BL/BUG/INC/Person/Book/Quote/new ID).
+  - `organon-canvas/references/LABEL_TRANSLATIONS.md` — EN↔FR translation table for canvas labels (most-missed rule when drafting in EN chat for an FR-folder canvas).
+  - `organon-diagramming/references/MERMAID_SYNTAX.md` — kepano-absorbed Mermaid syntax (was inline in SKILL.md; `kepano-sync.json` `target_file` updated, `body_sha256` unchanged).
+  - `organon-diagramming/references/EXCALIDRAW_SKELETON.md` — verbatim `.excalidraw.md` file structure for the connector→bridge persist step.
+  - `organon-session-discipline/references/BOOTSTRAP_CACHE.md` — sha256-manifest cache protocol from rule 2. Since removed.
+- **Cross-skill de-duplication**: the "language by folder" rule is now canonical in `organon-markdown-style` §Langue par dossier. `organon-frontmatter` and `organon-session-discipline` cross-ref instead of duplicating the rule.
+- **Tightened skill descriptions** (~400 chars each, down from ~700–850): dropped the `Use this skill EVERY TIME … is the recurring failure mode` boilerplate, simplified path discriminator from `iCloud~md~obsidian/Documents/Organon` to `Organon`. Discriminator keywords retained on all 7 skills.
+- **Token harness extended**: `scripts/token-harness.py` SESSIONS list updated so deep sessions correctly mark the new lazy refs as needed (S02, S06, S07). Methodology unchanged (cf. `docs/token-harness-methodology.md`).
+- Breaking: no — additive. Existing trigger keywords retained ; absorbed content paths/sha256 stable. Description path-pattern broadening is permissive (no false negatives expected).
+
+### v0.2.0 (chat 1.B initial)
+- Added 3 aux skills : `organon-bases`, `organon-canvas`, `organon-diagramming`.
+- Fixed B1 : `organon-session-discipline` description bumped from "6 behavioral rules" to "7" (the iter-3 « language coherence » rule was added without the description being updated).
+
+### v0.2.1 (chat 1.B feedback patch)
+- `organon-canvas` : explicit ID convention (kepano 16-char hex via cascade) + anti-pattern note on semantic IDs.
+- `organon-diagramming` : preview-in-chat-before-persist pattern made explicit on the Excalidraw bridge.
+
+### v0.2.2 (closure Phase 5)
+- `organon-frontmatter` : Touch-on-edit refined (≤ 3 keys/edit threshold, canonical journal entry, explicit skip if edit > 10 lines).
+
+### v0.3.0 (P7.1 — session-discipline cache)
+- `organon-session-discipline` rule #2 made cache-aware: sha256 manifest + cached AI Bootstrap snapshot in project memory space, ~300 tok saved per cache hit.
+
+### v0.4.0 (kepano absorption B4-complet)
+- Absorbed verbatim kepano `obsidian-skills` content (commit `fa1e131`) into 5 organon skills via HTML provenance markers and per-skill `references/` files.
+- Added `kepano-sync.json` (drift fingerprints), `scripts/sync-kepano.sh` (drift detection — read-only), `docs/syncing-kepano.md` (re-sync runbook).
+- Removed runtime cascade to kepano plugin — eliminates the additive cascade load (~1.1k–3.4k tokens saved per session depending on task shape).
+- Regression eval: 50/51 (98 %) on representative tasks, matching chat 1.B baseline.
+
+### v0.4.1 (automation runbooks)
+- New user-only skills `kepano-resync` and `plugin-release` (both `disable-model-invocation: true`) — end-to-end runbooks for drift resolution and release cuts.
+
+### v0.4.2 (slash-command wrappers)
+- New `/kepano-resync` and `/plugin-release` thin slash-command wrappers — make the v0.4.1 runbooks reachable from the picker. No skill content changes.
+
+### v0.4.3 (istefox 0.4.0–0.4.5 alignment)
+- Min `mcp-tools-istefox` floor bumped 0.3.12+ → 0.4.5+ (in-process MCP, auto-mkdirp, fail-loud rejects for upstream #80/#81/#84). Min Obsidian: 1.7.2 (transitive).
+- **Renamed "Voie B routing" → "Templater-first routing"** across SKILL/README/docs/token-harness — the design-era label was meaningless to readers; the new name describes what the routing actually does. Variants relabeled: "Two-step render-then-create" (BL/BUG/INC/ADR sequential IDs) and "One-step render-and-create" (Note/Concept/Person/etc. — domain-folder-mapped).
+- `organon-vault-write` — heading-patch safety **rewritten** based on smoke-test ground truth on istefox 0.4.5: `createTargetIfMissing: false` is **incompatible with Organon's H2-root convention** (triggers istefox 0.4.2 #80 reject on every heading patch since every Organon note is H2-root by design); default `true` silently appends to EOF on missing target. Correct discipline: pre-verify the heading exists with `get_vault_file` before patching. The previous skill text recommending `false` is reversed.
+- `organon-vault-write` — also documents 0.4.0 frontmatter array semantics (`replace`-with-scalar on array fields now errors; `append`/`prepend` JSON-decode + auto-wrap), notes 0.4.5 auto-mkdirp on `create_vault_file`/`append_to_vault_file`/`execute_template`, refreshes block-target rejects (0.4.2 #81 table-cell, 0.4.3 #84 fenced-code).
+- `organon-markdown-style` — block-patch pitfall reframed: table+block-ref + fenced-code-boundary cases are now structural fail-loud rejects (not HTTP 400 footguns), workaround language updated.
+- `organon-session-discipline` — rule #2 cache-example refreshed `v0.3.12` → `v0.4.5` to match the new floor.
+- Breaking: yes (version pin bumped + heading-patch discipline reversed; callers passing `createTargetIfMissing: false` to Organon notes will now see fail-loud rejects).
+
+### v0.5.0 (vault absorption)
+- **Tier 1 — Verbatim absorption with drift tracking** under `skills/organon-frontmatter/references/`:
+  - `REGISTRE_KEYS.md` ← full body of vault `[[Registre des clés de frontmatter]]` (~400 lines: global keys, per-type tables, per-domain tables, Tri Linter canonique, retired/in-migration keys).
+  - `PREFIXES.md` ← full body of vault `[[Préfixes d'identifiants]]` (FIN/VLT/SD/SPA + reserved + sub-types + protocols).
+  - `VOCABULARIES.md` refactored: Organon-curated framing prose for `type`/`status`/`content-model` (cross-linking to `REGISTRE_KEYS.md`) + 12 absorbed sections wrapping verbatim `## Valeurs` tables from each vault `Vocabulaire — <key>.md` (markers + per-section drift tracking).
+- **Tier 2 — Distilled Claude-actionable references** (no drift markers; provenance banner only — re-derive manually after material methodology changes):
+  - `METHODOLOGY_ADR.md` (~150 lines from vault's 206 — lifecycle, immutability, supersession, callout, anti-patterns).
+  - `METHODOLOGY_INC_BUG_BL.md` (~140 lines from vault's 152 — atomic types, Phase A/B/C, promotion criteria, MCP write discipline).
+- **Drift machinery** paralleling kepano: new `vault-sync.json` (14 entries), `scripts/sync-vault.sh` (live-FS read with `mktemp` atomic snapshot, parallel exit-code contract), `docs/syncing-vault.md`. Both `vault-sync` and `kepano-sync` mechanisms remain independent.
+- **`organon-frontmatter/SKILL.md`** updated: references list expanded with cascade triggers ("read METHODOLOGY_ADR.md when drafting an ADR or transitioning its `status:`", etc.). Inline `type:` enum corrected from 9 values to 16 (post-FIN-BL-0107 promotion 2026-05-05). Supersession discipline rewritten to permit ADR/FIN-DEC `supersedes:` frontmatter and reference the `[!warning] Superseded` callout. `amends:` / `amended-by:` flagged as deprecated (SD-ADR-011).
+- **New skill `organon-memory-audit`** (PR #7) — three-pole drift audit aligning plugin/skill/tool reality, canonical-snippets vault note, and per-surface implementations. Surface-aware (Code / Cowork / Chat), two scope modes, two interaction modes, edits never auto-applied. Invoked via `/organon-memory-audit`. Adds a third user-only skill alongside `kepano-resync` and `plugin-release`.
+- **Hook hardening** (PRs #6, #8, post-Codex review):
+  - `scripts/sync-vault.sh` and `scripts/sync-kepano.sh` — fixed `sha256sum`/`shasum` fallback that was unreachable on macOS without coreutils (`require_tool` exit-2 short-circuit before the fallback).
+  - `scripts/hooks/block-absorbed-edits.sh` — extended to also scan `vault-sync.json` (previously only blocked kepano-absorbed files; vault-absorbed `REGISTRE_KEYS.md` / `PREFIXES.md` / `VOCABULARIES.md` were unprotected). Added leading-`./` path canonicalization (also fixed pre-existing kepano blind spot).
+  - `scripts/hooks/validate-sync-json.sh` — fixed `if ! cmd; rc=$?` pattern that always read `$?` as the negation's exit code (always 0); informational drift exit 1 from `sync-kepano.sh` no longer falsely escalates to a validation block.
+  - `organon-memory-audit/SKILL.md` — surface-detection probe and `PLUGIN_ROOT` default switched from hard-coded `/Users/pierreandre/...` to `~` / `$HOME` (portable to remote Code agents and other macOS users). Integrity gate dropped `--no-fetch` (stale cache was defeating the gate) and rewrote the gate to distinguish drift (`rc=1` → recommends re-sync) from gate-unavailable (`rc≥2` → separate report-header note, doesn't block pole-3 reads).
+- Fixes the silent drift between plugin VOCABULARIES.md and vault registre that had accumulated since v0.4.0 (plugin had 9 `type:` values, vault had 16).
+- Breaking: no — additive. Existing skills unchanged in behavior; new references load on-demand.
+
+## Installation
+
+Claude Code:
+
+```
+/plugin install organon --marketplace folotp/claude-marketplace
+```
+
+Cowork: click "Install plugin" when this `.plugin` file appears in chat. The 8 description-triggered skills load automatically when working with the Organon vault; the Claude-only command `/organon-memory-audit` is invoked explicitly via slash command.
+
+## Author
+
+Pierre-André Folot · 2026-04-29 · Phase 5 wave 1 chat 1.B of the Claude × Organon refactor.
+
+## License
+
+MIT. See [`LICENSE`](LICENSE), which also carries the notice for the kepano-absorbed references.
