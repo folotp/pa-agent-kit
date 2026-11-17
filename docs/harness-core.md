@@ -269,6 +269,7 @@ Report 2.7. This repository follows upstream specifications (Agent Skills, Agent
 | `tools/specs/watch.json` | The watch list: `git` sources (recorded by the commit their HEAD points to) and `pages` (recorded by the SHA-256 of the served bytes). Add or remove a source here, then run `./dev specs update`. |
 | `specs.lock` | The committed record, one entry per watched source, sorted, no timestamp. |
 | `tools/specs/specs.py` | `check` (offline) and `update` (online). Standard library only. |
+| `.github/workflows/specs-bump.yml` | The weekly job (Mondays 06:17 UTC, or by hand): runs `update`; when the lock changed it pushes `specs-bump/<date>`, opens the PR and dispatches `validate.yml` on that branch, because a PR opened with the job token starts no CI run by itself (no write secret is stored). One bump PR at a time. Needs the repository setting that lets Actions create pull requests. |
 
 - **`./dev specs check`** runs in `./dev check` and `./dev ci`, so in the pre-commit hook, in PR runs and on `main`. It validates the lock against the watch list: same names, same URLs, well-formed digests. It opens no socket (a unit test forbids it). It cannot go red because upstream moved.
 - **`./dev specs update`** resolves every source and rewrites the lock if anything moved, printing what changed. It fails closed: if one source cannot be resolved, nothing is written. It reads no credential. Only the weekly job and a person run it.
