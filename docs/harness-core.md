@@ -63,3 +63,23 @@ Values are single-line strings or arrays of strings and may not contain double q
 ## Open questions
 
 - **The toolkit's Python harness** (`harness/scripts/dev.py`, `verify-agent*.py`, `harness/tests/`, `harness/config/development.json`, the six docs): about 4,900 lines that are not part of the core. This session leaves them in place, unwired. Delete them, move them under `plugins/pa-toolkit/`, or keep them as toolkit tooling? Decided by PA, most likely in session 23.
+
+## Cloud sessions
+
+Checked 2026-11-17 in a cloud session on this repository:
+
+- **mise is not installed by default.** `./dev setup` and every other verb stop with `mise not found` and install nothing. This is the fail-closed behaviour of report 2.4, not a bug.
+- **mise can be installed there.** The official installer put mise 2026.11.9 in `~/.local/bin/mise`, one of the locations `./dev` searches, so no `PATH` or shell-profile change is needed.
+- **`./dev setup` then installs the three pinned tools** (python 3.13.18, shellcheck 0.11.0, actionlint 1.7.12) and `./dev check` passes with every tool under mise's install directory.
+- Not yet checked in a cloud session: `./dev ci`.
+- mise warns that actionlint is deprecated in favour of the maintained fork `jactionlint`. The pin is unchanged; moving to the fork is a separate decision.
+
+Cloud recipe: install mise with its official installer, then `./dev setup`.
+
+## Open questions
+
+- **The toolkit's Python harness** (`harness/scripts/dev.py`, `verify-agent*.py`, `harness/tests/`, `harness/config/development.json`, the six docs): about 4,900 lines that are not part of the core. This session leaves them in place, unwired. Delete them, move them under `plugins/pa-toolkit/`, or keep them as toolkit tooling? Decided by PA, most likely in session 23.
+
+## Cloud sessions
+
+Checked 2026-11-17 in a cloud session on this repository: **mise is not installed**, so `./dev setup` and every other verb stop with `mise not found` and install nothing. This is the fail-closed behaviour of report 2.4, not a bug. Installing mise there (official installer, then `./dev setup`) depends on the session's network policy; the result is recorded below once checked.

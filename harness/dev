@@ -36,7 +36,7 @@ find_mise() {
 }
 
 mise_bin="$(find_mise)" ||
-  die "mise not found (PATH, /opt/homebrew/bin, /usr/local/bin, ~/.local/bin). Install mise, then run ./dev setup."
+  die "mise not found (PATH, /opt/homebrew/bin, /usr/local/bin, ~/.local/bin). Install mise, then run ./dev setup. A cloud session ships without mise and installs nothing by itself: see docs/harness-core.md, 'Cloud sessions'."
 
 # `setup` is the only verb that installs anything (auto_install is off in mise.toml).
 if [ "${1:-}" = "setup" ]; then
