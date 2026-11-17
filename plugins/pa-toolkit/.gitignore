@@ -1,0 +1,21 @@
+# Release archives (Release asset only, never committed)
+*.plugin
+
+# macOS
+.DS_Store
+
+# Claude Code per-user settings
+.claude/settings.local.json
+__pycache__/
+*.pyc
+
+# Development environments, caches and local/build artifacts
+.venv/
+.ruff_cache/
+.tooling/
+dist/
+build/
+*.bak
+*.skill
+.env
+.env.*
