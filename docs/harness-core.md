@@ -250,7 +250,7 @@ Repository skills live in `.agents/skills/<name>/`. Claude Code does not load th
 
 This repository has no skills of its own yet: its two helpers are slash commands in `.claude/commands/`, so `.agents/skills/` holds only a `.gitkeep`.
 
-Desktop app and cloud session: not checked yet (session 21, step 5).
+**Desktop app and cloud session** (2026-11-17, branch `kit-agent-files`, read-only prompt, Claude Code; version not shown by either surface). Both loaded `AGENTS.md` (the shared block) and the Claude-only section of `CLAUDE.md`; both listed `bump-plugin` and `new-plugin-skeleton` (shown as skills, not as commands); both showed `.claude/skills -> ../.agents/skills`; both refused `git push --dry-run origin HEAD:main` through the guard hook. The desktop app was tried in its local-session option (a local worktree, Code tab); its cloud-session option is the cloud result. Because the repository has no skills yet, the probe shows that the symlink survives checkout on both surfaces, not that a skill under `.agents/skills/` loads there; only the terminal probe (throwaway project) shows that. A guard refusal blocks the whole Bash call when the denied command is chained with others: run it alone.
 
 ## Path filters
 
