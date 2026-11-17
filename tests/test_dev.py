@@ -49,7 +49,8 @@ class FixtureRepo:
         test.addCleanup(shutil.rmtree, self.dir, True)
         (self.dir / "harness").mkdir()
         shutil.copy2(ROOT / "dev", self.dir / "dev")
-        shutil.copy2(ROOT / "harness" / "dev", self.dir / "harness" / "dev")
+        for name in ("dev", "conf.awk", "gate"):
+            shutil.copy2(ROOT / "harness" / name, self.dir / "harness" / name)
         for name in ("mise.toml", "mise.lock"):
             shutil.copy2(ROOT / name, self.dir / name)
         (self.dir / "harness.toml").write_text(harness_toml)
@@ -137,7 +138,7 @@ class DispatcherTest(unittest.TestCase):
     def test_unknown_verb_prints_usage(self):
         result = run_dev(ROOT, "frobnicate")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("usage: ./dev setup | check | ci | x", result.stderr)
+        self.assertIn("usage: ./dev setup | check | ci | gate [<sha>] | apply|deploy", result.stderr)
 
     @unittest.skipIf(
         any(os.access(p, os.X_OK) for p in MISE_LOCATIONS),

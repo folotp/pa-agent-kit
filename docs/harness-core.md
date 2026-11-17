@@ -110,3 +110,82 @@ Repository-specific, and therefore supplied by the repository:
 | Confirmation | always needs a terminal | a terminal only when guarded files changed (better: an unchanged gate needs none) |
 
 The core keeps `ha-config`'s two refinements (terminal only when something changed; `push`-event runs) as options rather than dropping either: `ci = "check-runs"` or `"workflow-runs"` in `harness.toml`.
+
+## Gate wrapper
+
+`harness/gate` holds every common check above; the repository supplies only its release command and a `[gate]` table in `harness.toml`. Report 2.3 item 2 is the design; this section is the contract.
+
+### Verbs
+
+| Command | Effect |
+|---|---|
+| `./dev gate` | Read-only, no credential: checks 1 to 4 on `HEAD`, then the descent. Runs under the ordinary `mise exec` re-run, so it works in an agent shell. |
+| `./dev gate <sha>` | Read-only: CI and merged-by for that commit only. |
+| `./dev apply` or `./dev deploy` (the `verb` of `harness.toml`) `[args…]` | The release: strict re-run, every check, the guarded diff, then the release command with `args`. The other verb is refused. |
+| `harness/gate tree` | Check 1 only, no network. For a release command that must re-check the tree after a long step (a Terraform plan). |
+
+Both verbs need the bot's read token: run them as `harness/gh-token.sh claude -- ./dev …`. Without `GH_TOKEN` the gate refuses before git can prompt.
+
+### Settings
+
+```toml
+tools = ["gh", "shellcheck"]                # must include gh: the gate reads GitHub with it
+[gate]
+repo = "owner/name"
+merger = "login"                            # the only login whose merge releases a commit
+verb = "deploy"                             # apply | deploy
+release = "scripts/deploy.sh"               # executable, relative to the root, no ..
+ci = "workflow-runs"                        # check-runs | workflow-runs
+required = [".github/workflows/ci.yml"]     # check names (check-runs) or workflow paths
+guarded = [".github", ".harness", "harness.toml", "mise.toml", "mise.lock", "scripts/deploy.sh", ".claude", ".codex", ".agents", ".githooks"]
+loaded = ["cloudflare/*.tf"]                # optional: ignored files the release would load (globs)
+keep_env = ["CLOUDFLARE_API_TOKEN_READ_ALL"]  # optional: variables the release command needs
+```
+
+`checks_app` (the App slug of the required check runs, usually `github-actions`) is required with `check-runs` and refused with `workflow-runs`. Every key is validated; a missing or malformed one stops the gate with its name. `guarded` must list everything that decides what the gate and the release do: CI, the core, the pins, the release command, the token script, the agent permissions and hooks.
+
+### The release command
+
+Called from the repository root as `<release> [args…]`, after every check and PA's confirmation, with:
+
+- `GATE_SHA`: the commit to release (`HEAD`, the tip of `main`);
+- `GATE_LAST`: the last released commit, empty when there is none;
+- `GATE_RECORD_DIR`: `<git common dir>/dev-<verb>/`, where it may keep its own state (Terraform's variables checksum, the SSH target);
+- the variables of the strict re-run plus `keep_env`, and **no** `GH_TOKEN` and no `GIT_CONFIG_*` entries (they carry the bot token).
+
+It validates its own arguments before reading any credential, reads its credentials behind a Keychain prompt, and confirms on `/dev/tty` if it needs to. Its exit code decides the record:
+
+| Exit | Meaning | Record |
+|---|---|---|
+| 0 | released | `last` = `GATE_SHA`, and a line in `log` |
+| 3 | passed, nothing released (a dry run such as `deploy --check`) | nothing |
+| anything else | failed | a `failed-exit-<n>` line in `log`; `last` unchanged |
+
+### The strict re-run
+
+The release verb is handed from `harness/dev` to `harness/gate` before `dev`'s own `mise exec` re-run. Stage 1 finds mise only at `/opt/homebrew/bin`, `/usr/local/bin` or `~/.local/bin` (never `PATH`), sets a system `PATH`, drops every variable outside a named list and every exported function, and re-runs under `mise exec --locked`. Stage 2 is marked by an argument and refuses any variable outside the same named list plus what bash, macOS and mise add (`PWD`, `OLDPWD`, `SHLVL`, `_`, `__CF_USER_TEXT_ENCODING`, `__MISE_*`): a named list, not a deny list (finding F6 of session 04), so a mise `[env]` section or a hand-typed second stage is caught whatever it sets. Stage 2 then runs `harness/dev check`, so every tool of `harness.toml` must resolve under mise.
+
+In an agent's sandbox, the git proxy lives in `GIT_CONFIG_PARAMETERS`, which the re-run drops: a release from an agent shell needs the sandbox off (tracker finding of session 04b). `./dev gate` keeps it and works inside the sandbox.
+
+### Refusal cases and their tests
+
+Each refusal is one line, `dev: refused: …`, exit 1. `tests/test_gate.py` has at least one test for each:
+
+| Check | Refused when |
+|---|---|
+| Settings | no `[gate]` table; bad `repo`, `merger`, `verb`, `release` (missing, not executable, `..`), `ci`, `checks_app`, `required`, `guarded`, `loaded`, `keep_env`; `gh` not in `tools`; an unknown key (`conf.awk`) |
+| Re-run | the other release verb; a variable outside the named list in stage 2 (a hand-typed `--stage2`) |
+| 1. Tree | an `assume-unchanged` or `skip-worktree` entry; a modified or untracked file; an ignored file mise loads (`mise.local.toml`, `.tool-versions`, `.config/`); an ignored file matching `loaded` |
+| Token | no `GH_TOKEN` |
+| 2. Tip | `origin` cannot be fetched; `HEAD` is not `origin/main`; GitHub's `main` differs or cannot be read |
+| 3. CI | runs cannot be read; no run; a run not completed; a run neither green, neutral nor skipped; a required run missing, or from another App |
+| 4. Merged by | PRs cannot be read; not the merge commit of a PR into `main`; several PRs; merged by anyone but `merger`; the PR cannot be read |
+| 5. Descent | a malformed record; `HEAD` does not descend from the last released commit |
+| 6. Guarded diff | guarded files changed (or no record) and no terminal; PA does not type `yes` |
+| Release | the release command fails (logged, not recorded) |
+
+The tests replace GitHub with a `gh` shell function that answers from files: they test the gate's decisions, not `gh`'s `--jq` filters, which are unchanged from the two live gates where they were tested against GitHub. The re-run tests use the real mise and are skipped where mise is not in a fixed location.
+
+### Moving a live repository to it (sessions 26 and 27)
+
+`dev.conf` becomes the `[gate]` table; `scripts/` gets the release command, cut from the repository's `./dev` (`run_apply` and the `tfvars` checks for `network-config`; `read_target`, `release_deploy` and the host-`HEAD` check for `ha-config`, with `--check` exiting 3). The record directories keep their names (`dev-apply`, `dev-deploy`), so the last released commit carries over.
