@@ -1,0 +1,13 @@
+# Read by harness/dev. Restricted TOML subset: `key = "string"`, `key = ["a", "b"]` on one line, and
+# the [checks] table. Anything else is refused, so a typo cannot silently drop a check.
+profile = "plugin"
+
+# Commands that must resolve under mise (names as found on PATH, not mise tool names).
+tools = ["python3", "shellcheck", "actionlint"]
+
+# Run in order by `./dev ci`, from the repository root, each through `bash -c`.
+[checks]
+unit-tests = "python3 -B -m unittest discover -s tests -v"
+marketplace = "python3 -B scripts/validate-marketplace.py"
+shellcheck = "shellcheck dev harness/dev"
+actionlint = "actionlint"
