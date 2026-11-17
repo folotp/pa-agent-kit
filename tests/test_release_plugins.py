@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,8 @@ from pathlib import Path
 SPEC = importlib.util.spec_from_file_location(
     "release_plugins", Path(__file__).resolve().parents[1] / "scripts" / "release-plugins.py")
 rp = importlib.util.module_from_spec(SPEC)
+# @dataclass resolves its module through sys.modules (required on Python 3.14).
+sys.modules[SPEC.name] = rp
 SPEC.loader.exec_module(rp)
 
 
