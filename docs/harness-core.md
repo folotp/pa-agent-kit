@@ -76,10 +76,37 @@ Checked 2026-11-17 in a cloud session on this repository:
 
 Cloud recipe: install mise with its official installer, then `./dev setup`.
 
-## Open questions
+## Gate: what the two step-0 wrappers share
 
-- **The toolkit's Python harness** (`harness/scripts/dev.py`, `verify-agent*.py`, `harness/tests/`, `harness/config/development.json`, the six docs): about 4,900 lines that are not part of the core. This session leaves them in place, unwired. Delete them, move them under `plugins/pa-toolkit/`, or keep them as toolkit tooling? Decided by PA, most likely in session 23.
+Session 20 compared the gates of `network-config` (`./dev apply`, Terraform) and `ha-config` (`./dev deploy`, SSH to the host), both at `origin/main` with sessions 04b and 13c merged. Both were written as one design, so most of the code is the same line for line.
 
-## Cloud sessions
+Common to both, and therefore in the core (`harness/gate`):
 
-Checked 2026-11-17 in a cloud session on this repository: **mise is not installed**, so `./dev setup` and every other verb stop with `mise not found` and install nothing. This is the fail-closed behaviour of report 2.4, not a bug. Installing mise there (official installer, then `./dev setup`) depends on the session's network policy; the result is recorded below once checked.
+| Part | Behaviour |
+|---|---|
+| Strict re-run | The release verb never trusts the caller: mise only from its fixed install locations (never `PATH`), a system `PATH`, a named list of variables (everything else dropped, exported functions too), then `mise exec --locked`. The second stage is marked by an argument, not by the environment. |
+| Second-stage check | Nothing dropped may be back (a hand-typed second stage, or a mise `[env]` section). |
+| Variables kept | Home, user, temp, terminal, locale, `MISE_STATE_DIR`; for the gate the bot token (`GH_TOKEN` and the `GIT_CONFIG_*` entries of `gh-token.sh`) and the proxy settings. |
+| Settings | `repo`, `merger`, `guarded_paths`, validated, in a committed file that is parsed, never sourced. |
+| 1. Clean tree | No `assume-unchanged` or `skip-worktree` entry; `git status` empty, untracked files included; no ignored file that mise would load (`mise.local.toml`, `.tool-versions`, `.mise/`, `.config/`). |
+| GitHub token | Refuses at once without `GH_TOKEN`, before git can prompt. |
+| 2. Tip | Fetch with every prompt off; `HEAD` = `origin/main` = `main` on GitHub. |
+| 4. Merged by | The commit is the merge commit of exactly one PR into `main`, merged by `merger`. |
+| 5. Descent | `HEAD` descends from the last released commit when this clone has it. Record in `<git common dir>/dev-<verb>/` (`last`, `log`), never committed. |
+| Guarded diff | Diff of the guarded paths since the last release (or their recent history when there is none), confirmed by PA on `/dev/tty`. |
+| Read-only verb | `./dev gate`: the checks on `HEAD` and the descent; `./dev gate <sha>`: CI and merged-by for that commit. |
+| Record | Written only after the release succeeded. |
+
+Repository-specific, and therefore supplied by the repository:
+
+| Part | `network-config` | `ha-config` |
+|---|---|---|
+| Verb | `apply`, no arguments (plus `plan`, ungated) | `deploy <mode> [options]` |
+| 3. CI source | Check runs for the commit, required check names from one App | Workflow runs of event `push` for the commit (scheduled runs also attach to `main`'s tip), required workflow paths |
+| Ignored files the release would load | `cloudflare/*.tf`, `*.tf.json`, `*.auto.tfvars`, `terraform.tfvars.json` | none (the commit itself reaches the host) |
+| Extra variable kept | the Cloudflare read token | none |
+| Extra state | checksum of the ignored `terraform.tfvars`, confirmed when new or changed | the SSH target, written once by hand |
+| Release | HCP token (prompt 1), plan on the read token, tree re-checked, confirm, write token (prompt 2), apply | deploy key into a throwaway `ssh-agent` (one prompt), forced command, host `HEAD` must equal the commit; `--check` releases nothing and records nothing |
+| Confirmation | always needs a terminal | a terminal only when guarded files changed (better: an unchanged gate needs none) |
+
+The core keeps `ha-config`'s two refinements (terminal only when something changed; `push`-event runs) as options rather than dropping either: `ci = "check-runs"` or `"workflow-runs"` in `harness.toml`.
