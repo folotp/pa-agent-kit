@@ -2,7 +2,16 @@
 
 The core is the small, sealed part of the development harness that every repository of the family shares: the `dev` dispatcher, its mise pins and a CI skeleton. It lives in `harness/`. This page records what the core contains, what was left out of it, and how to operate and change it.
 
-Status: first half of the core (session 19). The guard script, the gate wrapper and the agent bindings arrive with session 20; `./dev sync` with session 23.
+Status: the dispatcher and CI skeleton (session 19); the gate wrapper, the guard, the agent bindings and the GitHub App token script (session 20). `./dev sync` arrives with session 23.
+
+| File | Role |
+|---|---|
+| `harness/dev`, root `dev` | The dispatcher (below). |
+| `harness/conf.awk` | The one parser of `harness.toml`. |
+| `harness/gate` | The release gate ('Gate wrapper'). |
+| `harness/guard`, `harness/bindings/` | The pre-tool-use guard and its three binding templates ('Guard'). |
+| `harness/gh-token.sh`, `harness/gh-token.md` | Agents' GitHub identities: a one-hour App token per command, and PA's token behind a Keychain prompt ('Token script'). |
+| `harness.toml`, `mise.toml`, `mise.lock` | Settings and pins, per repository. |
 
 ## Inventory of the imported harness
 
@@ -16,20 +25,22 @@ Status: first half of the core (session 19). The guard script, the gate wrapper 
 | `harness/config/development.json`, `specifications.json` | 164 | Toolkit gate table and the spec list. `specifications.json` is input to session 22 (`specs.lock`). |
 | `harness/config/toolchain.json` | 38 | **Removed in this session.** It was a minimum-version check; mise pins replace it. |
 | `harness/docs/` (six pages), `harness/.github/` | 934 | Describe the toolkit harness. Session 23 (harness review) decides. |
-| `harness/.claude/settings.json`, `harness/.codex/hooks.json` | 100 | Bindings and guard wiring. Wait for session 20. |
+| `harness/.claude/settings.json`, `harness/.codex/hooks.json` | 100 | The toolkit harness's own hook wiring (`scripts/dev hook …`), loaded by nothing here. Not the core's bindings, which are new in `harness/bindings/` (session 20). They go with the toolkit's Python harness (see "Open questions"). |
 | `harness/pyproject.toml`, `uv.lock`, `.python-version`, `.gitignore` | 437 | Python environment of the toolkit harness. Not core. |
 
 Total imported: 5,662 lines. The core after this session is the new files only (see "Line count" in the tracker); the target for the whole core is about 600 lines.
 
 ## What the core does
 
-`./dev` is the single entry point. Verbs in this half:
+`./dev` is the single entry point:
 
 | Verb | Effect |
 |---|---|
 | `setup` | Installs the locked mise tools (`mise install --locked`). The only verb that installs anything. |
 | `check` | Verifies that every tool named in `harness.toml` resolves under mise, and prints each version and path. |
 | `ci` | `check`, then every check listed in `harness.toml`, in order. Stops at the first failure. |
+| `gate [<sha>]` | The read-only checks of the release gate ('Gate wrapper'). |
+| `apply`, `deploy` | The release, in a repository with a `[gate]` table; handed to `harness/gate` before any re-run. |
 | `x <command…>` | Runs any command under the pinned tools. |
 
 Rules, from report 2.4:
@@ -41,7 +52,7 @@ Rules, from report 2.4:
 
 ## `harness.toml`
 
-At the repository root. A restricted TOML subset, parsed by `harness/dev` itself; anything outside it is refused with the line number, so a typo cannot silently drop a check.
+At the repository root. A restricted TOML subset, parsed by `harness/conf.awk` for both `harness/dev` and `harness/gate` (the `[gate]` table is described under 'Gate wrapper'); anything outside it is refused with the line number, so a typo cannot silently drop a check.
 
 ```toml
 profile = "plugin"                         # plugin | tool | house-code | live-config
@@ -58,7 +69,7 @@ Values are single-line strings or arrays of strings and may not contain double q
 
 ## Tests
 
-`tests/test_dev.py` runs the real dispatcher in subprocesses with a hand-built environment (minimal `PATH`, no `DEV_UNDER_MISE`). It covers: tools resolved under mise from a hook's `PATH`; a tool outside mise refused; a preset `DEV_UNDER_MISE` not bypassing verification; `ci` order and stop at first failure; every `harness.toml` refusal; the usage message; a missing mise. The suite needs the pinned tools: run `./dev setup` first.
+`tests/test_dev.py` runs the real dispatcher in subprocesses with a hand-built environment (minimal `PATH`, no `DEV_UNDER_MISE`). It covers: tools resolved under mise from a hook's `PATH`; a tool outside mise refused; a preset `DEV_UNDER_MISE` not bypassing verification; `ci` order and stop at first failure; every `harness.toml` refusal; the usage message; a missing mise. `tests/test_gate.py` covers every refusal of the gate ('Gate wrapper'), `tests/test_guard.py` the guard in the three payload shapes and the bindings ('Guard'); the guard tests need `jq` on the system `PATH`. The suite needs the pinned tools: run `./dev setup` first.
 
 ## Open questions
 
@@ -214,3 +225,7 @@ Templates in `harness/bindings/`, copied to the repository root by `./dev sync` 
 | Antigravity | `.agents/hooks.json` | `run_command` | `toolCall.name`, `toolCall.args.CommandLine` | `{"decision":"deny","reason":…}` on stdout, exit 0 |
 
 Codex loads project hooks only in a trusted project, and only after the hooks themselves are reviewed and trusted (`/hooks`); a changed hook is skipped until it is trusted again. Codex and Antigravity run the command from the session's directory, so their bindings find the root with `git rev-parse --show-toplevel`. Delivery in each agent was checked by hand in session 20 (see the tracker).
+
+## Token script
+
+`harness/gh-token.sh` mints a one-hour GitHub App installation token for one repository, runs one command as `<app>[bot]` and revokes the token; `pa -- <command>` releases PA's own token through a Keychain prompt for one command. It moved from `ha-config/scripts/` in session 20 with no change in behaviour: only two mentions of its documentation's path differ (checked by `diff`, and by a `--info` read-back from the new place). Setup, rights and failure behaviour: `harness/gh-token.md`. Until a live repository syncs the core, its own copy stays and either copy serves any repository. The gate's 'no GitHub token' refusal names it.
