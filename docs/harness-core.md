@@ -239,3 +239,19 @@ Delivery, checked by hand on 2026-11-17 (session 20) with `git push --dry-run or
 ## Token script
 
 `harness/gh-token.sh` mints a one-hour GitHub App installation token for one repository, runs one command as `<app>[bot]` and revokes the token; `pa -- <command>` releases PA's own token through a Keychain prompt for one command. It moved from `ha-config/scripts/` in session 20 with no change in behaviour: only two mentions of its documentation's path differ (checked by `diff`, and by a `--info` read-back from the new place). Setup, rights and failure behaviour: `harness/gh-token.md`. Until a live repository syncs the core, its own copy stays and either copy serves any repository. The gate's 'no GitHub token' refusal names it.
+
+## Agent files
+
+`AGENTS.md` is canonical and stays under 24,000 bytes (Antigravity's limit; Codex allows 32 KiB). It holds a short shared block between `harness:shared:begin` and `harness:shared:end`, the same text in every repository, then the repository's own rules; depth goes into skills. `CLAUDE.md` is `@AGENTS.md` plus Claude-only notes. Claude Code reads `AGENTS.md` alone when there is no `CLAUDE.md`, but the stub stays. Templates for the block, the stub and the symlink command: `harness/templates/`.
+
+Repository skills live in `.agents/skills/<name>/`. Claude Code does not load that folder directly; it loads it through `.claude/skills`, one committed directory symlink to `../.agents/skills`.
+
+**Probe** (the first entry of the workaround register; re-run it to see whether the symlink can go). In a throwaway project holding one `SKILL.md` under `.agents/skills/<name>/`, run `claude -p "ok" --model haiku --output-format stream-json --verbose` and look for the name in the `skills` list of the `system`/`init` event. Result, 2026-11-17, macOS terminal: **absent** without the symlink, **listed** with it.
+
+This repository has no skills of its own yet: its two helpers are slash commands in `.claude/commands/`, so `.agents/skills/` holds only a `.gitkeep`.
+
+**Desktop app and cloud session** (2026-11-17, branch `kit-agent-files`, read-only prompt, Claude Code; version not shown by either surface). Both loaded `AGENTS.md` (the shared block) and the Claude-only section of `CLAUDE.md`; both listed `bump-plugin` and `new-plugin-skeleton` (shown as skills, not as commands); both showed `.claude/skills -> ../.agents/skills`; both refused `git push --dry-run origin HEAD:main` through the guard hook. The desktop app was tried in its local-session option (a local worktree, Code tab); its cloud-session option is the cloud result. Because the repository has no skills yet, the probe shows that the symlink survives checkout on both surfaces, not that a skill under `.agents/skills/` loads there; only the terminal probe (throwaway project) shows that. A guard refusal blocks the whole Bash call when the denied command is chained with others: run it alone.
+
+## Path filters
+
+`validate.yml` keeps one always-running job, `Marketplace validation` (the required check). A `changes` job lists the plugins whose files differ from the PR base, and each plugin's own job runs only when its path changed; pushes to `main` and manual runs check every plugin. See `docs/protected-main.md`. This replaces the PR check planner of the imported Python harness and the per-agent acceptance matrix, which the core does not carry.

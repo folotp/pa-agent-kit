@@ -42,3 +42,69 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./dev ci
+
+  # Path filters: a plugin's own checks run only when files under plugins/<name>/ change.
+  # `validate` above always runs (it is the required check). To add a plugin's checks, add an
+  # output here and a job gated on it; a skipped job counts as passing for branch protection.
+  # Plain `git diff` instead of a third-party filter action: no dependency to pin.
+  changes:
+    name: Changed plugins
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      pa_toolkit: ${{ steps.filter.outputs.pa_toolkit }}
+      organon: ${{ steps.filter.outputs.organon }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: filter
+        env:
+          # Empty outside pull requests: pushes to main and manual runs check every plugin.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          changed() {
+            [ -z "$BASE_SHA" ] || ! git diff --quiet "$BASE_SHA"...HEAD -- "plugins/$1/"
+          }
+          if changed pa-toolkit; then echo "pa_toolkit=true" >> "$GITHUB_OUTPUT"; else echo "pa_toolkit=false" >> "$GITHUB_OUTPUT"; fi
+          if changed organon; then echo "organon=true" >> "$GITHUB_OUTPUT"; else echo "organon=false" >> "$GITHUB_OUTPUT"; fi
+
+  # Organon's unit suite only. Its own `scripts/dev check` assumes the plugin is the repository
+  # root and fails inside this monorepo, so it is not run here (docs/protected-main.md).
+  # uv is a dependency of the plugin (locked by plugins/organon/uv.lock); the version is the
+  # one in the plugin's own toolchain.json, the action is pinned by SHA.
+  plugin-organon:
+    name: Plugin checks (organon)
+    needs: changes
+    if: needs.changes.outputs.organon == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: '0.13.7'
+          python-version: '3.12'
+      - name: Install shell tools
+        run: sudo apt-get update && sudo apt-get install -y shellcheck shfmt jq zip unzip
+      - name: Unit tests
+        working-directory: plugins/organon
+        run: uv run --locked python -B -m unittest discover -s tests
+
+  plugin-pa-toolkit:
+    name: Plugin checks (pa-toolkit)
+    needs: changes
+    if: needs.changes.outputs.pa_toolkit == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Unit tests
+        working-directory: plugins/pa-toolkit
+        run: python3 -B -m unittest discover -s tests -v
