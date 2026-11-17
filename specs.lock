@@ -53,22 +53,22 @@
     },
     "codex-hooks": {
       "kind": "page",
-      "sha256": "ba6ec7bfbeaa3ea23d2c030c6a69e4d5c98d32a79de094ea944d999eb8c7c57e",
-      "url": "https://developers.openai.com/codex/hooks"
+      "sha256": "37cdbfc3b9d19925f88af3e680399fd61bd3d15979961302160f97698cc5a841",
+      "url": "https://developers.openai.com/codex/hooks.md"
     },
     "codex-plugins": {
       "kind": "page",
-      "sha256": "94cf331f575f41594015beb6322fa01e6c30270049ddd159016e20d5881a7362",
-      "url": "https://developers.openai.com/codex/plugins/build"
+      "sha256": "b913de64a45a90f14fba0d4b0654444f1f60f4e2d4f79f3dd41332895f79721d",
+      "url": "https://developers.openai.com/codex/plugins/build.md"
     },
     "codex-rules": {
       "kind": "page",
-      "sha256": "6d875ac202d8f0ef54550962bdf53a2722933dabd01d4633c561659310930f6e",
-      "url": "https://developers.openai.com/codex/rules"
+      "sha256": "b2c34d7dc85cff73b3706518370f373620713d4acf51c543aa01df958171e350",
+      "url": "https://developers.openai.com/codex/rules.md"
     },
     "copilot-instructions": {
       "kind": "page",
-      "sha256": "7b6d0c1bc13a32d8faf929d57fc9e39cee5da6138153f10f42206d6fa5b88c28",
+      "sha256": "9b8969ff46fdea9e77a05b219d517b2794e691194648c6814e6f56c20d7ec705",
       "url": "https://docs.github.com/en/copilot/concepts/prompting-and-context/custom-instructions"
     }
   }
