@@ -5,7 +5,7 @@ This file is the canonical instruction file for every agent working in this repo
 <!-- harness:shared:begin -->
 ## Shared block
 
-Same text in every repository that uses the harness core; template in `harness/templates/AGENTS.shared.md`. Change it in the core, not here.
+Same text in every repository that uses the harness core; copied from `harness/templates/AGENTS.shared.md` by the core sync. Change it in the core, not here.
 
 - Work on a named feature branch, in a separate worktree per editing agent. Never change another checkout.
 - Commit, push and open PRs as your own bot identity; a person merges. Never merge, force-push, push to `main` or release, and never bypass main protection. The guard hook refuses these early; it is a warning, not the boundary.
