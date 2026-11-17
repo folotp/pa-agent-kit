@@ -2,7 +2,8 @@
 # dev: the core dispatcher. Every verb runs under `mise exec`, so tools come from the pinned
 # versions in mise.toml and never from the shell. Contract and rules: docs/harness-core.md.
 #
-# Usage: ./dev setup | check | ci | x <command…>
+# Usage: ./dev setup | check | ci | gate [<sha>] | apply|deploy [args…] | x <command…>
+# `gate` and the release verb (`apply` or `deploy`, named in harness.toml) belong to harness/gate.
 #
 # Layout: this file is <root>/harness/dev (or <root>/.harness/dev in a repository that syncs the
 # core); <root>/harness.toml names the profile, the tools to verify and the checks of `ci`.
@@ -45,6 +46,12 @@ if [ "${1:-}" = "setup" ]; then
   exec "$self" check
 fi
 
+# The release verbs re-run themselves from a clean environment (harness/gate). They are handed
+# over before the ordinary re-run below, so nothing from the caller's PATH or mise is used first.
+case "${1:-}" in
+  apply | deploy) exec "$(dirname "$self")/gate" release "$@" ;;
+esac
+
 # Every other verb re-runs itself under mise exec. A caller-set DEV_UNDER_MISE only skips the
 # re-run; verify_tools below still refuses any tool that resolves outside mise.
 if [ -z "${DEV_UNDER_MISE:-}" ]; then
@@ -52,38 +59,12 @@ if [ -z "${DEV_UNDER_MISE:-}" ]; then
   exec "$mise_bin" exec --locked -- "$self" "$@"
 fi
 
-# harness.toml is read as a restricted TOML subset (see the file's header). The awk below
-# normalizes it to tab-separated records and refuses everything else, so that a typo cannot
-# silently drop a check. Values may not contain double quotes or backslashes.
+# harness.toml is read by conf.awk, the one parser of that file (see its header). It refuses
+# anything outside the restricted subset, so that a typo cannot silently drop a check. The
+# [gate] records it also prints belong to harness/gate and are skipped here.
 parse_conf() {
   [ -f harness.toml ] || die "harness.toml not found in $root"
-  awk '
-    function bad(why) { printf "dev: harness.toml:%d: %s\n", NR, why > "/dev/stderr"; failed = 1; exit 1 }
-    /^[[:space:]]*(#.*)?$/ { next }
-    /^\[checks\]$/ { section = "checks"; next }
-    /^\[/ { bad("unsupported table") }
-    {
-      if (!match($0, /^[a-z][a-z0-9_-]* = /)) bad("unsupported line")
-      key = substr($0, 1, RLENGTH - 3)
-      val = substr($0, RLENGTH + 1)
-      if (val ~ /^"[^"\\]*"$/) {
-        val = substr(val, 2, length(val) - 2)
-        kind = "s"
-      } else if (val ~ /^\[("[^"\\,]*"(, *"[^"\\,]*")*)?\]$/) {
-        val = substr(val, 2, length(val) - 2)
-        gsub(/"/, "", val)
-        gsub(/, */, " ", val)
-        kind = "a"
-      } else bad("unsupported value")
-      if (section == "checks") {
-        if (kind != "s") bad("a check is a string")
-        print "check\t" key "\t" val
-      } else {
-        if (!((key == "profile" && kind == "s") || (key == "tools" && kind == "a"))) bad("unknown key " key)
-        print "conf\t" key "\t" val
-      }
-    }
-  ' harness.toml
+  awk -f "$(dirname "$self")/conf.awk" harness.toml
 }
 
 parsed="$(parse_conf)"
@@ -156,6 +137,12 @@ $checks
 EOF
     echo "ci: OK"
     ;;
+  gate)
+    # Read-only checks of the release gate; no credential is read.
+    shift
+    verify_tools
+    exec "$(dirname "$self")/gate" check "$@"
+    ;;
   x)
     shift
     [ "$#" -gt 0 ] || die "usage: ./dev x <command…>"
@@ -163,6 +150,6 @@ EOF
     exec "$@"
     ;;
   *)
-    die "usage: ./dev setup | check | ci | x <command…>"
+    die "usage: ./dev setup | check | ci | gate [<sha>] | apply|deploy [args…] | x <command…>"
     ;;
 esac

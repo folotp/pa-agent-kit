@@ -1,5 +1,6 @@
-# Read by harness/dev. Restricted TOML subset: `key = "string"`, `key = ["a", "b"]` on one line, and
-# the [checks] table. Anything else is refused, so a typo cannot silently drop a check.
+# Read by harness/conf.awk. Restricted TOML subset: `key = "string"`, `key = ["a", "b"]` on one
+# line, and the tables [checks] and [gate]. Anything else is refused, so a typo cannot silently drop
+# a check. This repository releases nothing to a live system, so it has no [gate] table.
 profile = "plugin"
 
 # Commands that must resolve under mise (names as found on PATH, not mise tool names).
@@ -9,5 +10,5 @@ tools = ["python3", "shellcheck", "actionlint"]
 [checks]
 unit-tests = "python3 -B -m unittest discover -s tests -v"
 marketplace = "python3 -B scripts/validate-marketplace.py"
-shellcheck = "shellcheck dev harness/dev"
+shellcheck = "shellcheck dev harness/dev harness/gate harness/guard harness/gh-token.sh"
 actionlint = "actionlint"

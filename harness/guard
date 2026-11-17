@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# guard: the pre-tool-use hook of the harness core, one script for the three agents.
+#
+# Usage, from a binding:  harness/guard claude|codex|antigravity   (the hook payload on stdin)
+# Bindings: harness/bindings/ (templates) and the repository's .claude/settings.json,
+# .codex/hooks.json and .agents/hooks.json. Contract: docs/harness-core.md, 'Guard'.
+#
+# It reads one shell command an agent is about to run and denies:
+#   - always: a push to main or master, a force push, a remote branch deletion, a git hook skipped
+#     with --no-verify, a PR merged or marked ready (PA's actions);
+#   - where nobody answers a prompt (a Claude Code cloud session, a permission mode that does not
+#     ask, or a mode the hook cannot see): the release verbs, `./dev apply` and `./dev deploy`.
+# Anything else passes. Patterns are matched on the command text, so a commit message quoting a
+# denied command is denied too: reword it.
+#
+# Early warning, not the boundary: an agent with a shell can edit this file or its bindings. The
+# boundary is the credentials PA releases (report 2.3). It fails closed: no jq, a payload it
+# cannot read or an unknown agent denies the call. Uses bash builtins and jq only.
+set -uo pipefail
+
+agent="${1:-}"
+
+# Claude Code and Codex deny on exit 2 with the reason on stderr; Antigravity reads a decision on
+# stdout. Reasons hold no double quote or backslash, so they need no JSON escaping.
+deny() {
+  if [ "$agent" = antigravity ]; then
+    printf '{"decision":"deny","reason":"harness guard: %s"}\n' "$1"
+    exit 0
+  fi
+  printf 'blocked by the harness guard: %s\n' "$1" >&2
+  exit 2
+}
+
+IFS= read -r -d '' payload || true
+command -v jq >/dev/null 2>&1 || deny "jq is missing, so the guard cannot read the call"
+
+case "$agent" in
+  claude | codex)
+    tool="$(printf '%s' "$payload" | jq -er '.tool_name | strings' 2>/dev/null)" || deny "cannot read the hook payload"
+    cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // "" | strings' 2>/dev/null)" || deny "cannot read the hook payload"
+    mode="$(printf '%s' "$payload" | jq -r '.permission_mode // "" | strings' 2>/dev/null)" || deny "cannot read the hook payload"
+    ;;
+  antigravity)
+    tool="$(printf '%s' "$payload" | jq -er '.toolCall.name | strings' 2>/dev/null)" || deny "cannot read the hook payload"
+    cmd="$(printf '%s' "$payload" | jq -r '.toolCall.args.CommandLine // "" | strings' 2>/dev/null)" || deny "cannot read the hook payload"
+    mode=""
+    ;;
+  *) deny "unknown agent '$agent' (claude, codex or antigravity)" ;;
+esac
+
+# Only shell commands are judged. apply_patch (Codex) carries a patch in .tool_input.command.
+case "$tool" in Bash | shell | exec_command | local_shell | run_command) ;; *) exit 0 ;; esac
+[ -n "$cmd" ] || exit 0
+
+# Where can a prompt be answered? Claude Code documents CLAUDE_CODE_REMOTE=true in cloud
+# sessions. Session 12 measured that an `ask` rule did not prompt in bypass mode; dontAsk refuses
+# instead of asking. Antigravity's payload carries no mode. An unknown or missing mode counts as
+# unattended (fail closed).
+unattended=""
+if [ "${CLAUDE_CODE_REMOTE:-}" = true ]; then
+  unattended="a cloud session"
+else
+  case "$mode" in
+    default | acceptEdits | plan | auto) ;;
+    *) unattended="permission mode '${mode:-not given}'" ;;
+  esac
+fi
+
+sep="(^|[[:space:];&|(\`/\"'])"
+end="([[:space:];&|)\"']|$)"
+
+# The release verbs, also quoted, through a path, a wrapper or `mise exec`, and the gate's own
+# release entry points.
+if [ -n "$unattended" ]; then
+  release_re="${sep}[\"']?dev[\"']?[[:space:]]+[\"']?(apply|deploy)${end}"
+  gate_re="${sep}[\"']?gate[\"']?[[:space:]]+[\"']?(release|--stage2)${end}"
+  if [[ "$cmd" =~ $release_re ]] || [[ "$cmd" =~ $gate_re ]]; then
+    deny "the release verbs are not available in $unattended: run ./dev apply or ./dev deploy in your own terminal"
+  fi
+fi
+
+# Judged per simple command: split on ; & | and newlines.
+git_re="${sep}git[[:space:]]"
+push_re="${sep}git[[:space:]]+([^[:space:]]+[[:space:]]+)*push${end}"
+main_re="[[:space:]:+](refs/heads/)?(main|master)${end}"
+force_re="[[:space:]](--force|--force-with-lease(=[^[:space:]]*)?|--force-if-includes|-f|--mirror|--delete|-d|--prune)${end}|[[:space:]]\+[^[:space:]]|[[:space:]]:[^[:space:]]"
+merge_re="${sep}gh[[:space:]]+pr[[:space:]]+(merge|ready)${end}|${sep}gh[[:space:]]+api[[:space:]].*pulls/[0-9]+/merge${end}"
+while IFS= read -r part; do
+  if [[ "$part" =~ $git_re ]] && [[ "$part" == *--no-verify* ]]; then
+    deny "--no-verify skips the git hooks"
+  fi
+  if [[ "$part" =~ $push_re ]]; then
+    [[ ! "$part" =~ $main_re ]] || deny "pushes to main go through a PR that PA merges"
+    [[ ! "$part" =~ $force_re ]] || deny "force pushes and remote branch deletions are PA's"
+  fi
+  [[ ! "$part" =~ $merge_re ]] || deny "PA merges PRs and marks them ready"
+done <<EOF
+${cmd//[;&|]/$'\n'}
+EOF
+
+exit 0

@@ -1,0 +1,466 @@
+"""Tests of the release gate (harness/gate): one test, at least, per refusal case.
+
+Most tests source the gate in bash and call one check against a disposable git fixture (a bare
+`origin` and a clone). GitHub is replaced by a `gh` shell function that answers from files, so the
+tests cover the gate's decisions, not gh's `--jq` filters (unchanged from the two live gates).
+The settings, the clean re-run and the release command are tested through the real script.
+Processes start in a new session (no controlling terminal); the confirmation tests give them a
+pseudo-terminal. Nothing touches the repository or the network.
+"""
+
+import os
+import pty
+import shutil
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+GATE = ROOT / "harness" / "gate"
+SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+MISE_LOCATIONS = ("/opt/homebrew/bin/mise", "/usr/local/bin/mise", os.path.expanduser("~/.local/bin/mise"))
+
+# Replaces gh: `gh api <path> …` prints the file of that path in $FIX, or fails when there is none.
+PRELUDE = r"""
+set -euo pipefail
+source "$GATE"
+gh() {
+  [ "$1" = api ] || return 1
+  local f="$FIX/$(printf '%s' "$2" | tr '/?&=' '____')"
+  [ -f "$f" ] && cat "$f"
+}
+conf_repo=o/r conf_merger=pa conf_verb=deploy conf_ci=check-runs conf_checks_app=github-actions
+conf_required=ci conf_guarded=guarded conf_loaded='*.auto.tfvars'
+"""
+
+
+def base_env(**extra):
+    env = {
+        "HOME": os.environ["HOME"],
+        "PATH": SYSTEM_PATH,
+        "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GATE": str(GATE),
+    }
+    env.update(extra)
+    return env
+
+
+def git(cwd, *args):
+    return subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(cwd), *args],
+        env=base_env(), check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def fix_name(path):
+    return path.translate(str.maketrans("/?&=", "____"))
+
+
+class GitFixture:
+    """A bare origin with one commit on main, and a clean clone of it (`work`)."""
+
+    def __init__(self, test):
+        self.dir = Path(tempfile.mkdtemp(prefix="gate-test."))
+        test.addCleanup(shutil.rmtree, self.dir, True)
+        self.fix = self.dir / "gh"
+        self.fix.mkdir()
+        self.origin = self.dir / "origin.git"
+        self.work = self.dir / "work"
+        git(self.dir, "init", "-q", "--bare", "-b", "main", str(self.origin))
+        git(self.dir, "clone", "-q", str(self.origin), str(self.work))
+        git(self.work, "checkout", "-q", "-b", "main")
+        (self.work / ".gitignore").write_text("mise.local.toml\n.tool-versions\n.config/\n*.auto.tfvars\n")
+        (self.work / "guarded").write_text("v1\n")
+        (self.work / "a.txt").write_text("a\n")
+        self.commit("first")
+
+    def commit(self, message):
+        git(self.work, "add", "-A")
+        git(self.work, "commit", "-q", "-m", message)
+        git(self.work, "push", "-q", "origin", "HEAD:main")
+        git(self.work, "fetch", "-q", "origin")
+        return self.sha
+
+    @property
+    def sha(self):
+        return git(self.work, "rev-parse", "HEAD")
+
+    def gh(self, path, text):
+        (self.fix / fix_name(path)).write_text(text)
+
+    def github_ok(self, sha=None, merger="pa"):
+        """GitHub answers for a commit that passes every check."""
+        sha = sha or self.sha
+        self.gh("repos/o/r/commits/main", sha + "\n")
+        self.gh(f"repos/o/r/commits/{sha}/check-runs?per_page=100", "ci\tgithub-actions\tcompleted\tsuccess\n")
+        self.gh(f"repos/o/r/commits/{sha}/pulls", "7\n")
+        self.gh("repos/o/r/pulls/7", merger + "\n")
+
+    def run(self, script, **env):
+        return subprocess.run(
+            ["bash", "-c", PRELUDE + script],
+            cwd=self.work, env=base_env(FIX=str(self.fix), **env),
+            capture_output=True, text=True, timeout=60, start_new_session=True,
+        )
+
+    def run_tty(self, script, answer):
+        """Runs the script on a pseudo-terminal, answers the first prompt; returns (rc, output)."""
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.chdir(self.work)
+            os.execve("/bin/bash", ["bash", "-c", PRELUDE + script], base_env(FIX=str(self.fix)))
+        out, answered = b"", False
+        while True:
+            try:
+                chunk = os.read(fd, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            out += chunk
+            if not answered and b"(type yes)" in out:
+                os.write(fd, answer + b"\n")
+                answered = True
+        _, status = os.waitpid(pid, 0)
+        os.close(fd)
+        return os.waitstatus_to_exitcode(status), out.decode(errors="replace")
+
+
+class GateTestCase(unittest.TestCase):
+    def setUp(self):
+        self.f = GitFixture(self)
+
+    def assertRefused(self, result, message):
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(message, result.stderr)
+
+    def assertPassed(self, result, message=""):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(message, result.stdout)
+
+
+class CleanTreeTest(GateTestCase):
+    def test_clean_tree_passes(self):
+        self.assertPassed(self.f.run("gate_clean_tree"), "gate: tree clean")
+
+    def test_hidden_index_entries_are_refused(self):
+        for flag in ("--assume-unchanged", "--skip-worktree"):
+            with self.subTest(flag):
+                git(self.f.work, "update-index", flag, "a.txt")
+                self.assertRefused(self.f.run("gate_clean_tree"), "index entry hides local changes")
+                git(self.f.work, "update-index", flag.replace("--", "--no-"), "a.txt")
+
+    def test_modified_and_untracked_files_are_refused(self):
+        (self.f.work / "a.txt").write_text("changed\n")
+        self.assertRefused(self.f.run("gate_clean_tree"), "working tree not clean")
+        git(self.f.work, "checkout", "-q", "a.txt")
+        (self.f.work / "new.txt").write_text("x\n")
+        self.assertRefused(self.f.run("gate_clean_tree"), "working tree not clean")
+
+    def test_ignored_files_that_mise_loads_are_refused(self):
+        for name in ("mise.local.toml", ".tool-versions", ".config/mise/config.toml"):
+            with self.subTest(name):
+                path = self.f.work / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("")
+                self.assertRefused(self.f.run("gate_clean_tree"), "ignored file that mise would load")
+                shutil.rmtree(self.f.work / ".config", True) if name.startswith(".config") else path.unlink()
+
+    def test_ignored_files_that_the_release_loads_are_refused(self):
+        (self.f.work / "zone.auto.tfvars").write_text("")
+        self.assertRefused(self.f.run("gate_clean_tree"), "ignored file that the release would load: zone.auto.tfvars")
+
+
+class TipTest(GateTestCase):
+    def test_no_github_token_is_refused(self):
+        self.assertRefused(self.f.run("need_gh_token"), "no GitHub token")
+
+    def test_tip_of_main_passes(self):
+        self.f.github_ok()
+        self.assertPassed(self.f.run("gate_tip"), "is the tip of main")
+
+    def test_unreachable_origin_is_refused(self):
+        git(self.f.work, "remote", "set-url", "origin", str(self.f.dir / "missing.git"))
+        self.assertRefused(self.f.run("gate_tip"), "cannot fetch origin main")
+
+    def test_head_behind_origin_main_is_refused(self):
+        old = self.f.sha
+        (self.f.work / "a.txt").write_text("b\n")
+        self.f.commit("second")
+        git(self.f.work, "checkout", "-q", "--detach", old)
+        self.assertRefused(self.f.run("gate_tip"), "is not the tip of origin/main")
+
+    def test_origin_main_differing_from_github_is_refused(self):
+        self.f.gh("repos/o/r/commits/main", "0" * 40 + "\n")
+        self.assertRefused(self.f.run("gate_tip"), "is not main of o/r on GitHub")
+
+    def test_unreadable_github_main_is_refused(self):
+        self.assertRefused(self.f.run("gate_tip"), "cannot read main of o/r from GitHub")
+
+
+class CiTest(GateTestCase):
+    def ci(self, runs, mode="check-runs", required="ci"):
+        sha = self.f.sha
+        if mode == "check-runs":
+            path, app = f"repos/o/r/commits/{sha}/check-runs?per_page=100", "github-actions"
+        else:
+            path, app = f"repos/o/r/actions/runs?head_sha={sha}&event=push&per_page=100", ""
+        if runs is not None:
+            self.f.gh(path, runs)
+        return self.f.run(f"conf_ci={mode} conf_checks_app={app} conf_required='{required}'; gate_ci {sha}")
+
+    def test_green_runs_pass_in_both_modes(self):
+        self.assertPassed(self.ci("ci\tgithub-actions\tcompleted\tsuccess\nlint\tother\tcompleted\tskipped\n"), "CI green")
+        wf = ".github/workflows/v.yml"
+        self.assertPassed(self.ci(f"{wf}\t\tcompleted\tsuccess\n", "workflow-runs", wf), "CI green")
+
+    def test_unreadable_runs_are_refused(self):
+        self.assertRefused(self.ci(None), "cannot read the check runs")
+        self.assertRefused(self.ci(None, "workflow-runs"), "cannot read the workflow runs")
+
+    def test_no_run_is_refused(self):
+        self.assertRefused(self.ci(""), "no CI run on")
+
+    def test_running_check_is_refused(self):
+        self.assertRefused(self.ci("ci\tgithub-actions\tin_progress\tnone\n"), "CI still running")
+
+    def test_failed_check_is_refused(self):
+        runs = "ci\tgithub-actions\tcompleted\tsuccess\nlint\tgithub-actions\tcompleted\tfailure\n"
+        self.assertRefused(self.ci(runs), "CI not green on")
+
+    def test_missing_required_check_is_refused(self):
+        self.assertRefused(self.ci("lint\tgithub-actions\tcompleted\tsuccess\n"), "no green 'ci' run")
+
+    def test_required_check_from_another_app_is_refused(self):
+        self.assertRefused(self.ci("ci\tsome-app\tcompleted\tsuccess\n"), "no green 'ci' run from github-actions")
+
+
+class MergedByTest(GateTestCase):
+    def test_merged_by_pa_passes(self):
+        self.f.github_ok()
+        self.assertPassed(self.f.run(f"gate_merged_by {self.f.sha}"), "merged by pa")
+
+    def test_unreadable_pulls_are_refused(self):
+        self.assertRefused(self.f.run(f"gate_merged_by {self.f.sha}"), "cannot read the PRs")
+
+    def test_commit_without_pr_is_refused(self):
+        self.f.gh(f"repos/o/r/commits/{self.f.sha}/pulls", "")
+        self.assertRefused(self.f.run(f"gate_merged_by {self.f.sha}"), "is not the merge commit of a PR")
+
+    def test_several_prs_are_refused(self):
+        self.f.gh(f"repos/o/r/commits/{self.f.sha}/pulls", "7\n8\n")
+        self.assertRefused(self.f.run(f"gate_merged_by {self.f.sha}"), "merge commit of several PRs")
+
+    def test_merged_by_someone_else_is_refused(self):
+        self.f.github_ok(merger="folotp-claude[bot]")
+        self.assertRefused(self.f.run(f"gate_merged_by {self.f.sha}"), "merged by 'folotp-claude[bot]', not by 'pa'")
+
+    def test_unreadable_pr_is_refused(self):
+        self.f.gh(f"repos/o/r/commits/{self.f.sha}/pulls", "7\n")
+        self.assertRefused(self.f.run(f"gate_merged_by {self.f.sha}"), "cannot read PR #7")
+
+
+class RecordTest(GateTestCase):
+    def write_last(self, text):
+        record = self.f.work / ".git" / "dev-deploy"
+        record.mkdir(exist_ok=True)
+        (record / "last").write_text(text)
+
+    def test_bad_record_is_refused(self):
+        self.write_last("not-a-sha\n")
+        result = self.f.run(f"gate_descends {self.f.sha}")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("bad record", result.stderr)
+
+    def test_descendant_passes(self):
+        self.write_last(self.f.sha + "\n")
+        (self.f.work / "a.txt").write_text("b\n")
+        self.assertPassed(self.f.run(f"gate_descends {self.f.commit('second')}"), "descends from the last released")
+
+    def test_going_back_is_refused(self):
+        old = self.f.sha
+        (self.f.work / "a.txt").write_text("b\n")
+        self.write_last(self.f.commit("second") + "\n")
+        self.assertRefused(self.f.run(f"gate_descends {old}"), "does not descend from the last released commit")
+
+
+class GuardedDiffTest(GateTestCase):
+    def setUp(self):
+        super().setUp()
+        self.first = self.f.sha
+        record = self.f.work / ".git" / "dev-deploy"
+        record.mkdir()
+        (record / "last").write_text(self.first + "\n")
+
+    def test_unchanged_guarded_files_need_no_terminal(self):
+        (self.f.work / "a.txt").write_text("b\n")
+        self.assertPassed(self.f.run(f"gate_guarded_diff {self.f.commit('second')}"), "guarded files unchanged")
+
+    def test_changed_guarded_files_without_terminal_are_refused(self):
+        (self.f.work / "guarded").write_text("v2\n")
+        self.assertRefused(self.f.run(f"gate_guarded_diff {self.f.commit('second')}"), "no terminal to confirm on")
+
+    def test_no_record_without_terminal_is_refused(self):
+        (self.f.work / ".git" / "dev-deploy" / "last").unlink()
+        self.assertRefused(self.f.run(f"gate_guarded_diff {self.f.sha}"), "no terminal to confirm on")
+
+    def test_changed_guarded_files_are_shown_and_need_yes(self):
+        (self.f.work / "guarded").write_text("v2\n")
+        sha = self.f.commit("second")
+        rc, out = self.f.run_tty(f"gate_guarded_diff {sha}; echo CONFIRMED", b"no")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("+v2", out)
+        self.assertIn("stopped: not confirmed", out)
+        rc, out = self.f.run_tty(f"gate_guarded_diff {sha}; echo CONFIRMED", b"yes")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("CONFIRMED", out)
+
+
+class ReleaseTest(GateTestCase):
+    """run_release: the record follows the release command's exit code; no token reaches it."""
+
+    def setUp(self):
+        super().setUp()
+        script = self.f.dir / "release.sh"
+        script.write_text('#!/bin/sh\nenv > "$GATE_RECORD_DIR/env.out"\nexit "$RC"\n')
+        script.chmod(0o755)
+        self.record = self.f.work / ".git" / "dev-deploy"
+
+    def release(self, rc):
+        return self.f.run(
+            f"root={self.f.dir} conf_release=release.sh; read_last; mkdir -p \"$record_dir\"; "
+            f"run_release {self.f.sha} --mode x",
+            RC=str(rc), GH_TOKEN="secret-token", GIT_CONFIG_COUNT="1",
+            GIT_CONFIG_KEY_0="http.extraHeader", GIT_CONFIG_VALUE_0="secret-header",
+        )
+
+    def test_success_is_recorded_and_gets_no_token(self):
+        self.assertPassed(self.release(0), "released")
+        self.assertEqual((self.record / "last").read_text().strip(), self.f.sha)
+        env = (self.record / "env.out").read_text()
+        self.assertIn(f"GATE_SHA={self.f.sha}", env)
+        self.assertNotIn("secret", env)
+        self.assertNotIn("GIT_CONFIG_COUNT", env)
+        self.assertNotIn("GIT_CONFIG_KEY_0", env)
+
+    def test_dry_run_records_nothing(self):
+        self.assertPassed(self.release(3), "nothing was released or recorded")
+        self.assertFalse((self.record / "last").exists())
+        self.assertFalse((self.record / "log").exists())
+
+    def test_failure_is_logged_not_recorded(self):
+        self.assertRefused(self.release(5), "the release failed (exit 5)")
+        self.assertFalse((self.record / "last").exists())
+        self.assertIn("failed-exit-5", (self.record / "log").read_text())
+
+
+GOOD_GATE = """
+tools = ["gh"]
+[gate]
+repo = "o/r"
+merger = "pa"
+verb = "deploy"
+release = "release.sh"
+ci = "workflow-runs"
+required = [".github/workflows/ci.yml"]
+guarded = [".github", "harness"]
+"""
+
+
+class ScriptFixture:
+    """A copy of the gate, its parser and dev, with its own harness.toml and release command."""
+
+    def __init__(self, test, toml):
+        self.dir = Path(tempfile.mkdtemp(prefix="gate-script."))
+        test.addCleanup(shutil.rmtree, self.dir, True)
+        (self.dir / "harness").mkdir()
+        for name in ("gate", "conf.awk", "dev"):
+            shutil.copy2(ROOT / "harness" / name, self.dir / "harness" / name)
+        (self.dir / "harness.toml").write_text('profile = "live-config"\n' + toml)
+        release = self.dir / "release.sh"
+        release.write_text("#!/bin/sh\nexit 0\n")
+        release.chmod(0o755)
+        git(self.dir, "init", "-q", "-b", "main")
+        git(self.dir, "add", "-A")
+        git(self.dir, "commit", "-q", "-m", "fixture")
+
+    def run(self, *args, **extra):
+        """Runs the gate with only home, a system PATH, the temp directory and `extra`."""
+        env = {"HOME": os.environ["HOME"], "PATH": SYSTEM_PATH, "TMPDIR": os.environ.get("TMPDIR", "/tmp")}
+        env.update(extra)
+        return subprocess.run(
+            [str(self.dir / "harness" / "gate"), *args], cwd=self.dir, env=env,
+            capture_output=True, text=True, timeout=120, start_new_session=True,
+        )
+
+
+class SettingsTest(unittest.TestCase):
+    def test_good_settings_pass(self):
+        result = ScriptFixture(self, GOOD_GATE).run("tree")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_bad_settings_are_refused(self):
+        cases = {
+            "no [gate] table": 'tools = ["gh"]\n',
+            "bad repo": GOOD_GATE.replace('"o/r"', '"o/r/x"'),
+            "bad merger": GOOD_GATE.replace('"pa"', '"p a"'),
+            "verb is apply or deploy": GOOD_GATE.replace('"deploy"', '"release"'),
+            "is not an executable file": GOOD_GATE.replace('"release.sh"', '"../release.sh"'),
+            "ci is check-runs or workflow-runs": GOOD_GATE.replace('"workflow-runs"', '"statuses"'),
+            "check-runs needs checks_app": GOOD_GATE.replace('"workflow-runs"', '"check-runs"'),
+            "checks_app is for check-runs only": GOOD_GATE + 'checks_app = "github-actions"\n',
+            "required lists at least one check": GOOD_GATE.replace('[".github/workflows/ci.yml"]', "[]"),
+            "guarded lists at least one path": GOOD_GATE.replace('[".github", "harness"]', "[]"),
+            "bad keep_env": GOOD_GATE + 'keep_env = ["lower"]\n',
+            "bad loaded": GOOD_GATE + 'loaded = ["a;b"]\n',
+            "tools must include gh": GOOD_GATE.replace('["gh"]', '["git"]'),
+            "unknown gate key": GOOD_GATE + 'mergers = "pa"\n',
+        }
+        for message, toml in cases.items():
+            with self.subTest(message):
+                result = ScriptFixture(self, toml).run("tree")
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(message, result.stderr)
+
+    def test_release_command_must_be_executable(self):
+        fixture = ScriptFixture(self, GOOD_GATE)
+        (fixture.dir / "release.sh").chmod(0o644)
+        self.assertIn("is not an executable file", fixture.run("tree").stderr)
+
+    def test_usage(self):
+        result = ScriptFixture(self, GOOD_GATE).run("frobnicate")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("usage: ./dev gate", result.stderr)
+
+
+@unittest.skipUnless(any(os.access(p, os.X_OK) for p in MISE_LOCATIONS), "mise not in a fixed location")
+class CleanReRunTest(unittest.TestCase):
+    """The strict re-run of a release, through the real mise."""
+
+    def test_wrong_verb_is_refused(self):
+        result = ScriptFixture(self, GOOD_GATE).run("release", "apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("releases with ./dev deploy, not ./dev apply", result.stderr)
+
+    def test_inherited_variables_are_dropped(self):
+        """Reaching the token check means the second stage found no foreign variable."""
+        result = ScriptFixture(self, GOOD_GATE).run("release", "deploy", SSL_CERT_FILE="/tmp/x", GIT_SSH_COMMAND="x")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("no GitHub token", result.stderr)
+
+    def test_hand_typed_second_stage_is_refused(self):
+        result = ScriptFixture(self, GOOD_GATE).run("--stage2", "deploy", GIT_SSH_COMMAND="x")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("GIT_SSH_COMMAND is set after the clean re-run", result.stderr)
+
+    def test_variable_named_in_keep_env_is_kept(self):
+        fixture = ScriptFixture(self, GOOD_GATE + 'keep_env = ["READ_TOKEN"]\n')
+        result = fixture.run("--stage2", "deploy", READ_TOKEN="x")
+        self.assertIn("no GitHub token", result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()
