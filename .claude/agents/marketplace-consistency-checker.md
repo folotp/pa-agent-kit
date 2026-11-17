@@ -20,14 +20,14 @@ Run all of these against the repo root (`${CLAUDE_PROJECT_DIR}` or `pwd`):
 
 4. **Registered in-repo plugins exist on disk.** Every `plugins[]` entry with a `./plugins/...` source must have a real directory and a `plugins/<name>/.claude-plugin/plugin.json`.
 
-5. **External github sources use the documented schema only.** For each entry whose `source` is an object with `source == "github"`: required `repo`; optional `ref`, `sha`. **Flag as error any other field** in the source object — notably `commit` (not in the schema; the loader-needs-commit hypothesis was ruled out by the docs). Also flag bare object form (no `ref`/`sha`) as a warning since "always latest commit" disables version-pinning.
+5. **No cross-repository sources.** Every entry's `source` must be a `./plugins/<dir>` string naming an existing directory. Flag any `github`/`url` source object, and any `ref`, `sha` or `commit` field, as an error.
 
 6. **No duplicate `version`.** Per the [docs](https://code.claude.com/docs/en/plugin-marketplaces#version-resolution-and-release-channels): "Avoid setting `version` in both `plugin.json` and the marketplace entry. The `plugin.json` value always wins silently." For every plugin entry: if a top-level `version` is set on the marketplace entry AND a `version` is also set in the corresponding `plugin.json` (in-repo) or in the source's `plugin.json` at the pinned ref (external) — flag as error.
 
 7. **README plugins table is in sync.** Each row in the table should reference an existing plugin and list the same version as `plugin.json`. Flag stale rows or missing rows.
 
 8. **Each plugin has at least one component.** `plugins/<name>/` must contain at least one of: `skills/`, `commands/`, `agents/`, `hooks/`. A plugin with none is dead weight. (External-source plugins are exempt — their components live in their own repo.)
-9. **ChatGPT list matches.** Every entry in `.agents/plugins/marketplace.json` must exist in `.claude-plugin/marketplace.json` with the same `sha`. Only plugins reviewed as portable belong there.
+9. **Codex list matches.** Every entry in `.agents/plugins/marketplace.json` must exist in `.claude-plugin/marketplace.json`, with `source` `{"source": "local", "path": <same relative path>}`. Only plugins reviewed as portable belong there.
 
 9. **No `.DS_Store` tracked.** Run `git ls-files | grep -E '(^|/)\.DS_Store$'`. Flag any results.
 
@@ -58,8 +58,8 @@ Marketplace consistent. N plugins registered, all manifests in sync.
 
 ## Severity rules
 
-- **Errors:** invalid JSON, missing manifest, registered in-repo plugin with no directory, unregistered in-repo directory, `author` field is a string, tracked `.DS_Store`, github source object with non-schema fields (e.g. `commit`), duplicate `version` (set in both `plugin.json` and marketplace entry).
-- **Warnings:** plugin with no components (in-repo only), README row drift (stale version), README missing a row for a registered plugin, bare github source object with no `ref`/`sha` (loads but disables pinning).
+- **Errors:** invalid JSON, missing manifest, registered in-repo plugin with no directory, unregistered in-repo directory, `author` field is a string, tracked `.DS_Store`, cross-repository (`github`/`url`) source or any `ref`/`sha`/`commit` field, duplicate `version` (set in both `plugin.json` and marketplace entry).
+- **Warnings:** plugin with no components (in-repo only), README row drift (stale version), README missing a row for a registered plugin.
 
 ## What not to do
 
