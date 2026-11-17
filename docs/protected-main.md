@@ -8,7 +8,7 @@
 |---|---|
 | `scripts/validate-marketplace.py` | Read-only structural check of both manifests against the plugin trees and the README table. No network. |
 | `.github/workflows/validate.yml` | Runs the unit tests and the validator. Its job name, `Marketplace validation`, is the required check on `main`; keep the two aligned. |
-| `scripts/release-plugins.py` | Plans (and, outside `--dry-run`, creates) the `<plugin>/v<version>` tag and draft release for each plugin whose version changed. |
+| `scripts/release-plugins.py` | Plans (and, outside `--dry-run`, creates) the `<plugin>/v<version>` tag and draft release for each plugin whose version changed, then builds the plugin's `.plugin` zip with `scripts/plugin_zip.py` and uploads it to the draft. |
 | `.github/workflows/release.yml` | Runs `release-plugins.py` after a push to `main`, or by hand with `dry_run` on. |
 | `tests/` | Disposable-repository tests for the release planning. They never touch real tags. |
 | `AGENTS.md`, `CLAUDE.md` | Agent policy and project rules. |
@@ -18,7 +18,7 @@ The release procedure and the `stable` pin are in [releases.md](releases.md).
 ## Why the release workflow is shaped this way
 
 - **Trigger on a version change, not on every merge.** The script compares each plugin's `version` at the pushed commit with the one before the push. A merge that bumps nothing creates nothing, so the first run after any merge is safe.
-- **A draft release, never a published one.** Release immutability, once enabled, makes a published release and its tag permanent, so the `.plugin` zips must be attached first. The workflow therefore stops at a draft; publishing is `gh release edit <tag> --draft=false`, after the assets are attached.
+- **A draft release, never a published one.** Release immutability, once enabled, makes a published release and its tag permanent, so the `.plugin` zips must be attached first. The workflow therefore attaches the zip to a draft and stops there; publishing is `gh release edit <tag> --draft=false`, after the assets are attached.
 - **`contents: write` only in the release job.** The validation workflow stays read-only.
 - **Reruns are safe.** A tag that already exists is skipped, so a failed run can be rerun.
 

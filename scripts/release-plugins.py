@@ -12,9 +12,11 @@ does not bump anything is a no-op.
 
 A release is a tag plus a DRAFT GitHub release. The draft is deliberate:
 repository release immutability makes a published release and its tag
-permanent, so assets (the `.plugin` zips, added later) must be attached
-before it is published. This script never publishes; publish with
-`gh release edit <tag> --draft=false` once the assets are attached.
+permanent, so assets must be attached before it is published. After creating
+each draft this script builds that plugin's `.plugin` zip from the tagged
+commit (scripts/plugin_zip.py) and uploads it to the draft. This script never
+publishes; publish with `gh release edit <tag> --draft=false` once you have
+checked the assets.
 
 `--dry-run` prints the plan and changes nothing (no tag, no release, no
 network). Without it the script needs `git push` rights and `gh` credentials
@@ -33,8 +35,13 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+# Sibling module; add the directory explicitly so importing this file by path (tests) works.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import plugin_zip  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MARKETPLACE = ".claude-plugin/marketplace.json"
@@ -99,7 +106,12 @@ def plan_releases(repo: Path, base: str | None, head: str) -> list[Release]:
 
 
 def publish_plan(repo: Path, releases: list[Release], head: str) -> None:
-    """Create and push each tag at `head`, then open its draft release."""
+    """Create and push each tag at `head`, open its draft release, attach its zip.
+
+    The zip is built from the tagged commit and uploaded to the draft; if the
+    build or upload fails the draft stays without its asset and the run fails,
+    so a later publish cannot happen unnoticed (the rerun skips the existing tag:
+    attach the asset by hand with `scripts/plugin_zip.py` and `gh release upload`)."""
     sha = git("rev-parse", head, repo=repo).strip()
     for release in releases:
         git("tag", release.tag, sha, repo=repo)
@@ -108,6 +120,11 @@ def publish_plan(repo: Path, releases: list[Release], head: str) -> None:
             ["gh", "release", "create", release.tag, "--draft", "--verify-tag",
              "--title", f"{release.plugin} {release.version}", "--generate-notes"],
             cwd=repo, check=True)
+        with tempfile.TemporaryDirectory(prefix="plugin-zip-") as temp:
+            assets = [plugin_zip.build(repo, sha, release.plugin, Path(temp))]
+            assets += plugin_zip.build_skills(repo, sha, release.plugin, Path(temp))
+            subprocess.run(["gh", "release", "upload", release.tag, *map(str, assets)],
+                           cwd=repo, check=True)
 
 
 def main() -> int:
@@ -128,7 +145,11 @@ def main() -> int:
     for release in releases:
         print(f"release-plugins: {'would tag' if args.dry_run else 'tagging'} {release.tag}")
     if not args.dry_run:
-        publish_plan(REPO_ROOT, releases, args.head)
+        try:
+            publish_plan(REPO_ROOT, releases, args.head)
+        except (plugin_zip.PackageError, subprocess.CalledProcessError) as exc:
+            print(f"release-plugins: FAIL: {exc}")
+            return 1
     return 0
 
 
