@@ -2,7 +2,7 @@
 
 The core is the small, sealed part of the development harness that every repository of the family shares: the `dev` dispatcher, its mise pins and a CI skeleton. It lives in `harness/`. This page records what the core contains, what was left out of it, and how to operate and change it.
 
-Status: the dispatcher and CI skeleton (session 19); the gate wrapper, the guard, the agent bindings and the GitHub App token script (session 20). `./dev sync` arrives with session 23.
+Status: the dispatcher and CI skeleton (session 19); the gate wrapper, the guard, the agent bindings and the GitHub App token script (session 20). `./dev sync`, the checksum check and the workaround register (session 23).
 
 | File | Role |
 |---|---|
@@ -220,7 +220,7 @@ It fails closed: no `jq`, a payload it cannot read or an unknown agent denies th
 
 ### Bindings
 
-Templates in `harness/bindings/`, copied to the repository root by `./dev sync` (session 23). They call `.harness/guard`, the synced location; this repository's own copies call `harness/guard`, and `tests/test_guard.py` checks that the two agree.
+Templates in `harness/bindings/`, copied to the repository root by `./dev sync` where the root file is absent (see 'Sync'). They call `.harness/guard`, the synced location; this repository's own copies call `harness/guard`, and `tests/test_guard.py` checks that the two agree.
 
 | Agent | File | Matcher | Payload read | Deny |
 |---|---|---|---|---|
@@ -275,3 +275,25 @@ Report 2.7. This repository follows upstream specifications (Agent Skills, Agent
 - **`./dev specs update`** resolves every source and rewrites the lock if anything moved, printing what changed. It fails closed: if one source cannot be resolved, nothing is written. It reads no credential. Only the weekly job and a person run it.
 - A page hash moves on any edit upstream, editorial ones included. The bump PR's diff names the source; reading the page says whether it matters. Pages that a script renders client-side hash their served shell, not their text; treat a source that never moves, or moves every week, as a defect of the watch list.
 - `plugin.json` and marketplace entries are not validated against the locked schemas: the lock holds hashes, not contents. The checks of the plugins themselves stay in `scripts/validate-marketplace.py` and the path-filtered plugin jobs.
+
+## Sync
+
+`./dev sync <rev> <consumer-checkout> [--pr]` runs in the workshop (a verb of this repository's `harness.toml`, `tools/sync/sync.py`, not part of the core). `<rev>` is a core tag (`harness-vX.Y`) or any commit-ish; the core is read from git at that revision, never from the working tree. `harness/core.files` lists what is core (the toolkit Python under `harness/` is not listed, so it never reaches a consumer).
+
+In the consumer, on a new branch `harness-sync/<rev>` and in one commit:
+
+| What | Rule |
+|---|---|
+| `.harness/` | Replaced as a whole, byte for byte, with `VERSION` (revision and commit) and `CHECKSUMS` (sha256 per file). Never merged or edited in place, so there is nothing to resolve. |
+| `dev`, bindings (`.claude/settings.json`, `.codex/hooks.json`, `.agents/hooks.json`), `CLAUDE.md` | Written only when the root file is absent. A root file that exists and differs is left alone and named in the report: the consumer's own settings are never overwritten. |
+| `AGENTS.md` shared block | Replaced between the `harness:shared` markers when both are present once; otherwise reported. |
+| `.claude/skills` | Checked, reported, never changed. |
+| `harness.toml`, `mise.toml`, `mise.lock` | The consumer's; never touched. |
+
+The sync refuses a target that is not the top of a work tree, is the workshop, has uncommitted changes, already has the branch, or already has this core ("nothing changed"; a failed run leaves no branch). Without `--pr` nothing leaves the machine; with it the branch is pushed and one PR is opened with `gh`, its body holding the report. Credentials are the caller's: an agent wraps the whole command in `harness/gh-token.sh`.
+
+`./dev check` and `./dev ci` verify `.harness/CHECKSUMS` when `.harness/` exists: a changed or missing file, or a file the list lacks, stops the run and names it. This detects an accident or a hand edit. It is not protection: an agent that can write `.harness/` can write `CHECKSUMS` too. The guard and review are what hold; the checksum makes drift visible. A consumer fixes drift by syncing again, never by editing `.harness/`. Tests: `tests/test_sync.py` (a disposable workshop and consumer; a one-byte change, an extra file and a missing file are each caught).
+
+## Workaround register and harness review
+
+`docs/workaround-register.md` lists every workaround with its reason, exit condition and probe (`tools/probes/`); `tests/test_register.py` keeps it complete. The `harness-review` skill (`.agents/skills/harness-review/`) runs the probes and reads the pins, `specs.lock` and the agents' release notes twice a year, in two modes (workshop, consumer), and only proposes. `.github/workflows/harness-review-due.yml` opens the issue when a review is due.

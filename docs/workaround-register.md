@@ -20,7 +20,7 @@ The `harness-review` skill (`.agents/skills/harness-review/`) runs the probes tw
 
 ### claude-md-stub
 
-- **Reason:** `AGENTS.md` is the canonical instruction file. Claude Code reads `CLAUDE.md`, so `CLAUDE.md` is a stub that imports it with `@AGENTS.md` and adds the Claude-only notes. The stub text and the symlink README come from `harness/templates/`.
+- **Reason:** `AGENTS.md` is the canonical instruction file. Claude Code is documented to read `CLAUDE.md`, so `CLAUDE.md` is a stub that imports it with `@AGENTS.md` and holds the Claude-only notes (a project without any `CLAUDE.md` is read by `AGENTS.md` alone, which the probe shows). The stub text and the symlink README come from `harness/templates/`.
 - **Exit condition:** Claude Code reads `AGENTS.md` in a project that has no `CLAUDE.md`, and the Claude-only notes have another home (for example `.claude/` settings, commands and agents, which are already separate).
 - **Probe:** `tools/probes/claude-md-stub.sh`. Two throwaway projects hold the same `AGENTS.md` (a code word); one has a `CLAUDE.md` that imports it (control). `claude -p` is asked for the code word in each.
 - **Last result:** 2026-11-17, Claude Code 2.1.326: the bare project answered the code word, so the condition holds for the CLI on this Mac. One model-answered run, and not yet checked in the desktop app or a cloud session. Decision: keep the stub; propose removal only after a second run and the desktop and cloud checks. The stub also carries the Claude-only notes, which would need a home first.
