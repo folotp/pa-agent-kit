@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Entry point of this repository; the dispatcher and its contract are in harness/dev.
+exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/harness/dev" "$@"

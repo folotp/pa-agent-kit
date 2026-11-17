@@ -2,7 +2,7 @@
 
 Read root `CLAUDE.md` for the repository's existing marketplace constraints and commands; its Claude entry point imports this file. This file adds agent-neutral maintenance policy without moving those rules. Read `docs/protected-main.md` for automation architecture, validation, CI and recovery. No vault access is needed for development checks.
 
-Use a named feature branch and a separate worktree per editing agent; never change another checkout. Run the online `python3 scripts/validate-marketplace.py` and `python3 -m unittest discover -s tests -v` for automation changes. Do not run the bumper against actual manifests merely to test it: use disposable fixtures or an explicitly authorized pin update. No automatic merge, force push, bypass of main protection or plugin release is authorized by a documentation task.
+Use a named feature branch and a separate worktree per editing agent; never change another checkout. Run `./dev ci` for automation changes: it runs the unit tests, the online `scripts/validate-marketplace.py`, shellcheck and actionlint under the pinned tools of `mise.toml` (`./dev setup` installs them; core contract in `docs/harness-core.md`). Do not run the bumper against actual manifests merely to test it: use disposable fixtures or an explicitly authorized pin update. No automatic merge, force push, bypass of main protection or plugin release is authorized by a documentation task.
 
 ## Code and documentation
 

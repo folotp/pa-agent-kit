@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+# dev: the core dispatcher. Every verb runs under `mise exec`, so tools come from the pinned
+# versions in mise.toml and never from the shell. Contract and rules: docs/harness-core.md.
+#
+# Usage: ./dev setup | check | ci | x <command…>
+#
+# Layout: this file is <root>/harness/dev (or <root>/.harness/dev in a repository that syncs the
+# core); <root>/harness.toml names the profile, the tools to verify and the checks of `ci`.
+# Runs on macOS /bin/bash 3.2: no associative arrays, no mapfile.
+set -euo pipefail
+
+self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+root="$(cd "$(dirname "$self")/.." && pwd)"
+cd "$root"
+
+die() {
+  echo "dev: $*" >&2
+  exit 1
+}
+
+# mise by PATH first, then its usual install locations: hooks, scheduled jobs and cloud sessions
+# often run with a minimal PATH. Never reads DEV_MISE_BIN or any other variable from the caller.
+find_mise() {
+  local c
+  if c="$(command -v mise 2>/dev/null)" && [ -x "$c" ]; then
+    echo "$c"
+    return 0
+  fi
+  for c in /opt/homebrew/bin/mise /usr/local/bin/mise "$HOME/.local/bin/mise"; do
+    [ -x "$c" ] && {
+      echo "$c"
+      return 0
+    }
+  done
+  return 1
+}
+
+mise_bin="$(find_mise)" ||
+  die "mise not found (PATH, /opt/homebrew/bin, /usr/local/bin, ~/.local/bin). Install mise, then run ./dev setup. A cloud session ships without mise and installs nothing by itself: see docs/harness-core.md, 'Cloud sessions'."
+
+# `setup` is the only verb that installs anything (auto_install is off in mise.toml).
+if [ "${1:-}" = "setup" ]; then
+  [ "$#" -eq 1 ] || die "usage: ./dev setup"
+  "$mise_bin" install --locked
+  exec "$self" check
+fi
+
+# Every other verb re-runs itself under mise exec. A caller-set DEV_UNDER_MISE only skips the
+# re-run; verify_tools below still refuses any tool that resolves outside mise.
+if [ -z "${DEV_UNDER_MISE:-}" ]; then
+  export DEV_UNDER_MISE=1
+  exec "$mise_bin" exec --locked -- "$self" "$@"
+fi
+
+# harness.toml is read as a restricted TOML subset (see the file's header). The awk below
+# normalizes it to tab-separated records and refuses everything else, so that a typo cannot
+# silently drop a check. Values may not contain double quotes or backslashes.
+parse_conf() {
+  [ -f harness.toml ] || die "harness.toml not found in $root"
+  awk '
+    function bad(why) { printf "dev: harness.toml:%d: %s\n", NR, why > "/dev/stderr"; failed = 1; exit 1 }
+    /^[[:space:]]*(#.*)?$/ { next }
+    /^\[checks\]$/ { section = "checks"; next }
+    /^\[/ { bad("unsupported table") }
+    {
+      if (!match($0, /^[a-z][a-z0-9_-]* = /)) bad("unsupported line")
+      key = substr($0, 1, RLENGTH - 3)
+      val = substr($0, RLENGTH + 1)
+      if (val ~ /^"[^"\\]*"$/) {
+        val = substr(val, 2, length(val) - 2)
+        kind = "s"
+      } else if (val ~ /^\[("[^"\\,]*"(, *"[^"\\,]*")*)?\]$/) {
+        val = substr(val, 2, length(val) - 2)
+        gsub(/"/, "", val)
+        gsub(/, */, " ", val)
+        kind = "a"
+      } else bad("unsupported value")
+      if (section == "checks") {
+        if (kind != "s") bad("a check is a string")
+        print "check\t" key "\t" val
+      } else {
+        if (!((key == "profile" && kind == "s") || (key == "tools" && kind == "a"))) bad("unknown key " key)
+        print "conf\t" key "\t" val
+      }
+    }
+  ' harness.toml
+}
+
+parsed="$(parse_conf)"
+profile=""
+tools=""
+checks=""
+while IFS="$(printf '\t')" read -r kind a b; do
+  case "$kind" in
+    conf)
+      case "$a" in
+        profile) profile="$b" ;;
+        tools) tools="$b" ;;
+      esac
+      ;;
+    check) checks="$checks$a	$b
+" ;;
+  esac
+done <<EOF
+$parsed
+EOF
+[ -n "$profile" ] || die "harness.toml: profile is missing"
+[ -n "$tools" ] || die "harness.toml: tools is empty"
+
+# Fails closed: every tool named in harness.toml must resolve into a directory that mise manages.
+verify_tools() {
+  local dirs t p d found
+  dirs="$("$mise_bin" bin-paths)" || die "mise cannot list its tool directories (run ./dev setup)"
+  [ -n "$dirs" ] || die "mise has no tools installed (run ./dev setup)"
+  for t in $tools; do
+    p="$(command -v "$t" 2>/dev/null)" || die "$t not found under mise (run ./dev setup)"
+    found=""
+    while IFS= read -r d; do
+      [ -n "$d" ] || continue
+      case "$p" in "$d"/*) found=1 ;; esac
+    done <<EOF
+$dirs
+EOF
+    [ -n "$found" ] || die "$t resolved outside mise: $p"
+  done
+}
+
+# Printed by check and at the start of ci, so that every log carries the resolved versions.
+print_tools() {
+  local t
+  printf '%-12s %s\n' profile "$profile"
+  printf '%-12s %s %s\n' mise "$("$mise_bin" --version | head -1)" "$mise_bin"
+  for t in $tools; do
+    printf '%-12s %s\n' "$t" "$(command -v "$t")"
+  done
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  check)
+    [ "$#" -eq 1 ] || die "usage: ./dev check"
+    verify_tools
+    print_tools
+    ;;
+  ci)
+    [ "$#" -eq 1 ] || die "usage: ./dev ci"
+    verify_tools
+    print_tools
+    [ -n "$checks" ] || die "harness.toml: no checks"
+    while IFS="$(printf '\t')" read -r name command_line; do
+      [ -n "$name" ] || continue
+      echo "== $name"
+      bash -c "$command_line" </dev/null || die "check failed: $name"
+    done <<EOF
+$checks
+EOF
+    echo "ci: OK"
+    ;;
+  x)
+    shift
+    [ "$#" -gt 0 ] || die "usage: ./dev x <command…>"
+    verify_tools
+    exec "$@"
+    ;;
+  *)
+    die "usage: ./dev setup | check | ci | x <command…>"
+    ;;
+esac
