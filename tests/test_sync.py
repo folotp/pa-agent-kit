@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from test_dev import clean_env, run_dev
 
@@ -83,7 +84,8 @@ class SyncTest(unittest.TestCase):
         spec.loader.exec_module(module)
         calls, real_git = [], module.git
         module.git = lambda cwd, *args, **kw: calls.append(args) or real_git(cwd, *args, **kw)
-        with contextlib.redirect_stdout(io.StringIO()):
+        # In this process, so git takes its identity from os.environ (CI has no global one).
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch.dict(os.environ, GIT_ENV):
             self.assertEqual(module.main(["harness-v0.1", str(self.consumer)]), 0)
         naming = [args for args in calls if any("harness-v0.1" in a for a in args)]
         self.assertTrue(naming and all(args[0] == "rev-parse" for args in naming[:1]), naming)

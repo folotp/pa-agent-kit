@@ -817,6 +817,9 @@ class EndToEndTest(unittest.TestCase):
         home = self.f.dir / "home"
         (home / ".config" / "mise").mkdir(parents=True)
         (home / ".config" / "mise" / "config.toml").write_text('[env]\nHTTPS_PROXY = "http://planted.invalid"\n')
+        # The gate also looks for mise in ~/.local/bin (where CI installs it): keep it findable.
+        (home / ".local" / "bin").mkdir(parents=True)
+        (home / ".local" / "bin" / "mise").symlink_to(next(m for m in MISE_LOCATIONS if os.access(m, os.X_OK)))
         result = self.f.release(HOME=str(home))
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("the mise configuration sets variables: HTTPS_PROXY", result.stderr)
