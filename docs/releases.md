@@ -9,12 +9,12 @@ Merging a version bump is the release.
 3. The same run builds the plugin's `<name>-v<version>.plugin` zip from the tagged commit ([`scripts/plugin_zip.py`](../scripts/plugin_zip.py)) and uploads it to the draft. Check the asset (`gh release view <tag>`, `unzip -l`).
 4. Publish: `gh release edit <plugin>/v<version> --draft=false`. With release immutability on, a published release and its tag can no longer change, which is why assets come first.
 
-To preview what a run would do, start the workflow by hand: `gh workflow run release.yml -f base=<commit before the change>`. `dry_run` is on by default and prints the plan without creating a tag or release. Locally: `python3 scripts/release-plugins.py --base <commit> --dry-run`.
+To preview what a run on `main` would do, start the workflow by hand from `main`: `gh workflow run release.yml --ref main -f base=<commit before the change>`. `dry_run` is on by default and prints the plan without creating a tag or release. To preview a branch, run the script locally: `python3 scripts/release-plugins.py --base <commit> --head <branch> --dry-run`.
 
-The workflow refuses before tagging anything (session 24b, K8):
+The workflow refuses before its script runs, in both modes (session 24b, K8, and the Codex second read, C1):
 
-- in both modes, when `base` does not resolve to a commit: an unknown base would make every plugin look changed (a push with no previous commit, all zeros, releases nothing);
-- in write mode (a push, or a dispatch with `dry_run` off), when the run's ref is not `refs/heads/main` or its commit is not on `origin/main`: a dispatch from another branch would otherwise tag that branch's unmerged versions.
+- when the run's ref is not `refs/heads/main` (the job does not even start: its `if:` names `main`) or its commit is not on `origin/main`. The job holds a contents-write token and runs the checked-out `release-plugins.py`, so a run from another branch, even a dry run, would execute that branch's unmerged code with the token;
+- when `base` does not resolve to a commit: an unknown base would make every plugin look changed (a push with no previous commit, all zeros, releases nothing).
 
 Agents create releases as drafts only: the guard denies `gh release create` without `--draft`, `--draft=false` and a `gh api` release write without `draft=true` (`docs/harness-core.md`, 'Guard'). Publishing (step 4) is PA's. Tags themselves are not yet ruled: session 25 adds a tag ruleset on `*/v*`, `harness-v*` and `stable` that restricts creating, moving and deleting them to PA.
 

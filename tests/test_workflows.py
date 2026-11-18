@@ -101,13 +101,19 @@ class AggregateRuleTest(unittest.TestCase):
 class WriteTokenWorkflowTest(unittest.TestCase):
     """release.yml and specs-bump.yml hold a contents-write token: keep it narrow (K8, K11)."""
 
-    def test_release_refuses_a_bad_base_and_write_mode_off_main(self):
+    def test_release_refuses_a_bad_base_and_any_run_off_main(self):
         text = (WORKFLOWS / "release.yml").read_text()
-        self.assertIn('git rev-parse --verify --quiet "$BASE^{commit}"', text)
-        self.assertIn('[ "$GITHUB_REF" = refs/heads/main ]', text)
-        self.assertIn('git merge-base --is-ancestor "$GITHUB_SHA" origin/main', text)
+        release = jobs(text)["release"]
+        # Codex C1: the job holds the write token in both modes, so it starts only on main.
+        self.assertRegex(release, r"(?m)^    if: github\.ref == 'refs/heads/main'$")
+        self.assertIn('git rev-parse --verify --quiet "$BASE^{commit}"', release)
+        self.assertIn('[ "$GITHUB_REF" = refs/heads/main ]', release)
+        self.assertIn('git merge-base --is-ancestor "$GITHUB_SHA" origin/main', release)
+        # The refusals hold in both modes: none sits under the dry-run test.
+        script = release.index("python3 scripts/release-plugins.py")
+        self.assertNotIn('if [ "$DRY_RUN" != "true" ]', release[:script])
         # The refusals come before the script that tags.
-        self.assertLess(text.index("refs/heads/main ]"), text.index("scripts/release-plugins.py"))
+        self.assertLess(release.index("refs/heads/main ]"), script)
 
     def test_specs_bump_keeps_no_credential_and_pushes_the_lock_only(self):
         text = (WORKFLOWS / "specs-bump.yml").read_text()
