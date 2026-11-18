@@ -84,18 +84,16 @@ Safeguards:
 - never commit the `.plugin`;
 - no `--no-verify`.
 
-This repo does not ship a `notify-marketplace.yml` workflow yet. Without it the marketplace cron picks up new releases within 30 minutes. Adding it needs a `MARKETPLACE_DISPATCH_TOKEN` secret; see the marketplace README.
+Releases come from the workshop: after a version bump merges, PA tags `pa-toolkit/v<version>` and the workshop's `release.yml` drafts the release with the `.plugin` and per-skill zips (`docs/releases.md` of the workshop). No notification workflow or dispatch token is involved.
 
 ## Development
 
-`./scripts/dev doctor`, `./scripts/dev check`, `./scripts/dev check --staged` and
-explicit `./scripts/dev format` serve humans, agents, Git and Linux/macOS CI.
-Development requires no vault/finance connection or AI client. Setup, dependency
-policy, architecture, native-hook limits, CI ownership and recovery live in the
-[development runbook](https://github.com/folotp/pa-toolkit/blob/main/docs/development.md),
-[architecture guide](https://github.com/folotp/pa-toolkit/blob/main/docs/development-architecture.md)
-and [acceptance summary](https://github.com/folotp/pa-toolkit/blob/main/docs/acceptance.md).
-Development configuration and adapters are excluded from the distributed plugin.
+Development happens in the `pa-marketplace` workshop. Run `./dev check` from the workshop root
+before committing and `./dev ci` before pushing; the `plugin-pa-toolkit` job in the workshop's
+`validate.yml` runs this plugin's unit tests when it changes, and a change here needs a version
+bump. Development requires no vault/finance connection or AI client. Development
+configuration and adapters are excluded from the distributed plugin. The standalone toolkit
+repository's `scripts/dev`, `release-checks.yml` and `docs/` did not move with it.
 
 ## Layout
 
@@ -104,9 +102,8 @@ Development configuration and adapters are excluded from the distributed plugin.
 agents/                         decision-gatekeeper, plugin-release-executor
 skills/fin-*/SKILL.md           six finance skills
 skills/plugin-release/          shared release driver, packager, runbook and Claude shim
-scripts/dev                    shared developer interface (source only)
 config/                        toolchain, runtime inventory and release extension (source only)
-docs/                          architecture, setup, client limits and evidence (source only)
+tests/                         release driver and branch-guard tests (source only)
 ```
 
 Tracked in Organon as SD-BL-0066.

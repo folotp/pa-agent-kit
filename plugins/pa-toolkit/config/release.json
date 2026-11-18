@@ -1,15 +1,21 @@
 {
   "schema_version": 1,
   "preflight": [
-    "./scripts/dev",
-    "release-check"
+    "python3",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests"
   ],
   "package": [
-    "./scripts/dev",
-    "package",
-    "--packager",
-    "{packager}",
-    "--output",
-    "{output}"
+    "python3",
+    "../../scripts/plugin_zip.py",
+    "--ref",
+    "HEAD",
+    "--out",
+    "{output}",
+    "pa-toolkit"
   ]
 }
