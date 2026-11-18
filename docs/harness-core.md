@@ -157,12 +157,14 @@ verb = "deploy"                             # apply | deploy
 release = "scripts/deploy.sh"               # executable, relative to the root, no ..
 ci = "workflow-runs"                        # check-runs | workflow-runs
 required = [".github/workflows/ci.yml"]     # check names (check-runs) or workflow paths
-guarded = [".github", ".harness", "harness.toml", "mise.toml", "mise.lock", "scripts/deploy.sh", ".claude", ".codex", ".agents", ".githooks"]
+guarded = ["scripts/host-check.sh", "tests/deploy"]  # the repository's own extra paths (the fixed set is always added)
 loaded = ["cloudflare/*.tf"]                # optional: ignored files the release would load (globs)
 keep_env = ["CLOUDFLARE_API_TOKEN_READ_ALL"]  # optional: variables the release command needs
 ```
 
-`checks_app` (the App slug of the required check runs, usually `github-actions`) is required with `check-runs` and refused with `workflow-runs`. Every key is validated; a missing or malformed one stops the gate with its name. `guarded` must list everything that decides what the gate and the release do: CI, the core, the pins, the release command, the token script, the agent permissions and hooks.
+`checks_app` (the App slug of the required check runs, usually `github-actions`) is required with `check-runs` and refused with `workflow-runs`. Every key is validated; a missing or malformed one stops the gate with its name.
+
+**What PA is shown (finding K6).** The candidate commit supplies these settings, so it cannot also decide alone what PA sees. The gate always guards a fixed set: `dev`, `.gitignore`, `harness.toml`, `.harness` (or the workshop's `harness`), `mise.toml`, `mise.lock`, `.github`, `.githooks`, `.claude`, `.codex`, `.agents`, and the release command. It adds the union of `guarded` at the last release and in the candidate, and the last release's release command, so dropping a path from the list does not hide it. It reads the `[gate]` table of `harness.toml` at the last release too: a change of any key (`repo`, `merger`, `verb`, `release`, `ci`, `checks_app`, `required`, `guarded`, `loaded`, `keep_env`) is printed as `key: 'old' -> 'new'`, and a last release with no readable `[gate]` table (a repository's first release under the core) makes every setting new. Any of these needs PA's `yes` on the terminal. `guarded` therefore lists only what the fixed set misses: host scripts the release calls, the release's own tests.
 
 ### The release command
 

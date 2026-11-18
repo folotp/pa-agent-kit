@@ -34,6 +34,18 @@ conf_repo=o/r conf_merger=pa conf_verb=deploy conf_ci=check-runs conf_checks_app
 conf_required=ci conf_guarded=guarded conf_loaded='*.auto.tfvars'
 """
 
+# The harness.toml [gate] table that PRELUDE's conf_* values stand for.
+SOURCED_GATE = """[gate]
+repo = "o/r"
+merger = "pa"
+verb = "deploy"
+ci = "check-runs"
+checks_app = "github-actions"
+required = ["ci"]
+guarded = ["guarded"]
+loaded = ["*.auto.tfvars"]
+"""
+
 
 def base_env(**extra):
     env = {
@@ -324,22 +336,58 @@ class RecordTest(GateTestCase):
 class GuardedDiffTest(GateTestCase):
     def setUp(self):
         super().setUp()
-        self.first = self.f.sha
+        # The [gate] table of the last release: the same settings as PRELUDE's conf_* values.
+        (self.f.work / "harness.toml").write_text(SOURCED_GATE)
+        self.first = self.f.commit("settings")
         record = self.f.work / ".git" / "dev-deploy"
         record.mkdir()
         (record / "last").write_text(self.first + "\n")
 
     def test_unchanged_guarded_files_need_no_terminal(self):
         (self.f.work / "a.txt").write_text("b\n")
-        self.assertPassed(self.f.run(f"gate_guarded_diff {self.f.commit('second')}"), "guarded files unchanged")
+        self.assertPassed(self.f.run(f"gate_guarded_diff {self.f.commit('second')}"), "guarded files and gate settings unchanged")
 
     def test_changed_guarded_files_without_terminal_are_refused(self):
         (self.f.work / "guarded").write_text("v2\n")
         self.assertRefused(self.f.run(f"gate_guarded_diff {self.f.commit('second')}"), "no terminal to confirm on")
 
-    def test_no_record_without_terminal_is_refused(self):
+    def test_fixed_paths_are_guarded_whatever_the_settings_say(self):
+        for name in ("dev", ".gitignore", "mise.toml", ".github/workflows/ci.yml", ".githooks/pre-push", ".claude/settings.json", "harness/x"):
+            with self.subTest(name):
+                path = self.f.work / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(name + "\n")
+                sha = self.f.commit(name)
+                self.assertRefused(self.f.run(f"gate_guarded_diff {sha}"), "no terminal to confirm on")
+
+    def test_path_dropped_from_guarded_is_still_shown(self):
+        """The candidate cannot hide a path by removing it from `guarded`: the last release's list counts."""
+        (self.f.work / "guarded").write_text("v2\n")
+        sha = self.f.commit("second")
+        rc, out = self.f.run_tty(f"conf_guarded=other; gate_guarded_diff {sha}", b"no")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("+v2", out)
+        self.assertIn("guarded: 'guarded' -> 'other'", out)
+
+    def test_changed_setting_is_shown_and_needs_yes(self):
+        (self.f.work / "a.txt").write_text("b\n")
+        sha = self.f.commit("second")
+        self.assertRefused(self.f.run(f"conf_merger=someone; gate_guarded_diff {sha}"), "no terminal to confirm on")
+        rc, out = self.f.run_tty(f"conf_merger=someone; gate_guarded_diff {sha}; echo CONFIRMED", b"yes")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Gate settings changed since the last release", out)
+        self.assertIn("merger: 'pa' -> 'someone'", out)
+        self.assertIn("CONFIRMED", out)
+
+    def test_last_release_without_gate_table_needs_confirmation(self):
+        (self.f.work / ".git" / "dev-deploy" / "last").write_text(git(self.f.work, "rev-parse", "HEAD~1") + "\n")
+        rc, out = self.f.run_tty(f"gate_guarded_diff {self.f.sha}", b"no")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("no readable [gate] table (none): every gate setting is new", out)
+
+    def test_no_record_is_refused(self):
         (self.f.work / ".git" / "dev-deploy" / "last").unlink()
-        self.assertRefused(self.f.run(f"gate_guarded_diff {self.f.sha}"), "no terminal to confirm on")
+        self.assertRefused(self.f.run(f"gate_guarded_diff {self.f.sha}"), "no last release on record")
 
     def test_changed_guarded_files_are_shown_and_need_yes(self):
         (self.f.work / "guarded").write_text("v2\n")

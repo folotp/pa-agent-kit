@@ -47,6 +47,9 @@ keep_added='PATH PWD OLDPWD SHLVL _ __CF_USER_TEXT_ENCODING __MISE_*'
 
 conf_repo="" conf_merger="" conf_verb="" conf_release="" conf_ci="" conf_checks_app=""
 conf_required="" conf_guarded="" conf_loaded="" conf_keep_env="" conf_tools=""
+# The same settings at the last release (read_old_settings); read by name, through ${!old}.
+# shellcheck disable=SC2034
+old_repo="" old_merger="" old_verb="" old_release="" old_ci="" old_checks_app="" old_required="" old_guarded="" old_loaded="" old_keep_env=""
 
 load_conf() {
   local parsed kind k v
@@ -282,29 +285,73 @@ confirm() {
   [ "$answer" = "yes" ] || die "stopped: not confirmed"
 }
 
-# 6. The guarded files (CI, the core, the release command, agent permissions and hooks): their
-# diff since the last release, confirmed by PA. Nothing to confirm when nothing changed, so an
-# unchanged gate needs no terminal. With no usable record, their recent history.
+# Paths that decide what the gate and the release do, guarded whatever harness.toml says (finding
+# K6): the entry point, what the clean-tree check sees (.gitignore), the settings, the core, the
+# pins, CI, hooks and agent permissions. gate_guarded_diff adds the core's own directory and the
+# release command, both the last release's and the candidate's.
+fixed_guarded='dev .gitignore harness.toml .harness mise.toml mise.lock .github .githooks .claude .codex .agents'
+# Every key of the [gate] table: a change of any of them since the last release is shown as such.
+gate_keys='repo merger verb release ci checks_app required guarded loaded keep_env'
+
+# The [gate] settings of harness.toml at the last release, read by this conf.awk into old_<key>.
+# old_settings: ok; none (no harness.toml or no [gate] table then: a first release under the core);
+# unreadable (it does not parse).
+old_settings=""
+read_old_settings() {
+  local parsed kind k v
+  for k in $gate_keys; do printf -v "old_$k" '%s' ""; done
+  old_settings=none
+  git cat-file -e "$last_released:harness.toml" 2>/dev/null || return 0
+  parsed="$(git show "$last_released:harness.toml" | awk -f "$here/conf.awk" 2>/dev/null)" || {
+    old_settings=unreadable
+    return 0
+  }
+  while IFS="$(printf '\t')" read -r kind k v; do
+    case "$kind $k" in
+      "gate "*) printf -v "old_$k" '%s' "$v" && old_settings=ok ;;
+    esac
+  done <<EOF
+$parsed
+EOF
+}
+
+# 6. What decides the gate and the release, since the last release, confirmed by PA: the diff of
+# the guarded paths (the fixed set, the core, both release commands, and the union of the last
+# release's and the candidate's `guarded`, so a candidate cannot hide a path by dropping it), and
+# each [gate] setting that changed. Nothing to confirm when nothing changed, so an unchanged gate
+# needs no terminal.
 gate_guarded_diff() {
-  local sha="$1" paths
-  read -r -a paths <<<"$conf_guarded"
+  local sha="$1" k cur old changed="" diff_quiet=1 list
+  local -a paths
   read_last
-  if [ -n "$last_released" ] && git cat-file -e "$last_released^{commit}" 2>/dev/null; then
-    if git diff --quiet "$last_released" "$sha" -- "${paths[@]}"; then
-      echo "gate: guarded files unchanged since the last release (${last_released:0:12})"
-      return 0
-    fi
-    need_tty
+  [ -n "$last_released" ] || refuse "no last release on record in $record_dir/last"
+  read_old_settings
+  list="$fixed_guarded $(basename "$here") $conf_release $conf_guarded"
+  [ "$old_settings" != ok ] || list="$list $old_release $old_guarded"
+  # Split on blanks into words (empty ones dropped); read does not expand globs.
+  read -r -a paths <<<"$list"
+  for k in $gate_keys; do
+    cur="conf_$k" old="old_$k"
+    [ "$old_settings" != ok ] || [ "${!cur}" = "${!old}" ] || changed="$changed  $k: '${!old}' -> '${!cur}'"$'\n'
+  done
+  git diff --quiet "$last_released" "$sha" -- "${paths[@]}" || diff_quiet=""
+  if [ -n "$diff_quiet" ] && [ -z "$changed" ] && [ "$old_settings" = ok ]; then
+    echo "gate: guarded files and gate settings unchanged since the last release (${last_released:0:12})"
+    return 0
+  fi
+  need_tty
+  if [ "$old_settings" != ok ]; then
+    echo "== The last release's harness.toml has no readable [gate] table ($old_settings): every gate setting is new."
+  elif [ -n "$changed" ]; then
+    echo "== Gate settings changed since the last release (${last_released:0:12} -> ${sha:0:12}):"
+    printf '%s' "$changed"
+  fi
+  if [ -z "$diff_quiet" ]; then
     echo "== Guarded files changed since the last release (${last_released:0:12} -> ${sha:0:12}):"
     git --no-pager diff --stat "$last_released" "$sha" -- "${paths[@]}"
     git --no-pager diff "$last_released" "$sha" -- "${paths[@]}"
-  else
-    need_tty
-    [ -z "$last_released" ] || echo "== The recorded last release ${last_released:0:12} is not in this clone."
-    echo "== No previous release on record. Recent changes to the guarded files at ${sha:0:12}:"
-    git --no-pager log --oneline -10 "$sha" -- "${paths[@]}"
   fi
-  confirm "Confirm the guarded files above (type yes): "
+  confirm "Confirm the changes above (type yes): "
 }
 
 # --- The release ------------------------------------------------------------------------------
