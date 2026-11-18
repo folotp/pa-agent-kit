@@ -115,6 +115,9 @@ class WriteTokenWorkflowTest(unittest.TestCase):
         # The tag name reaches the shell through the environment, never by interpolation.
         self.assertNotRegex(release, r"run:[^\n]*\$\{\{")
         self.assertIn('--tag "$TAG"', release)
+        # One concurrency group per tag: a shared group cancels a pending run (Codex, PR 97).
+        self.assertRegex(text, r"(?m)^  group: release-\$\{\{ github\.ref \}\}$")
+        self.assertIn("cancel-in-progress: false", text)
         # The script never creates a tag: PA does (tag ruleset, session 25).
         self.assertNotIn("git push", release)
 

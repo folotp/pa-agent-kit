@@ -113,8 +113,9 @@ def release_for_tag(repo: Path, tag: str, head: str) -> Release:
     """Return the Release a pushed tag stands for, or raise ValueError.
 
     The tag must be `<plugin>/v<version>`, name a plugin the manifest lists at `head`,
-    and match the version in that plugin's manifest at `head`: a tag that disagrees
-    with the commit it points at would attach the wrong content to a permanent release."""
+    and match the version in that plugin's manifest at `head`; if the tag exists it must
+    point at `head`. A tag that disagrees with the commit the zips are built from would
+    attach the wrong content to a permanent release."""
     plugin, sep, rest = tag.partition("/v")
     if not sep or not plugin or "/" in plugin or not SEMVER.match(rest):
         raise ValueError(f"tag {tag!r} is not <plugin>/v<version>")
@@ -126,6 +127,16 @@ def release_for_tag(repo: Path, tag: str, head: str) -> Release:
     actual = version_at(repo, head, source[2:])
     if actual != rest:
         raise ValueError(f"tag {tag!r} names version {rest} but {source[2:]} is at {actual!r} in {head}")
+    # An existing tag must point at `head`: otherwise the zips would be built from a
+    # revision other than the one the permanent release names (a tag not yet pushed
+    # is a dry run before tagging, so there is nothing to compare).
+    try:
+        tagged = git("rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}", repo=repo).strip()
+    except RuntimeError:
+        tagged = None
+    head_sha = git("rev-parse", f"{head}^{{commit}}", repo=repo).strip()
+    if tagged and tagged != head_sha:
+        raise ValueError(f"tag {tag!r} points at {tagged[:12]} but --head is {head_sha[:12]}")
     return Release(plugin, rest)
 
 

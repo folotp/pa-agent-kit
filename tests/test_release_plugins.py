@@ -90,6 +90,16 @@ class PlanReleasesTests(unittest.TestCase):
             with self.subTest(tag=tag), self.assertRaises(ValueError):
                 rp.release_for_tag(self.repo, tag, "HEAD")
 
+    def test_existing_tag_must_point_at_the_head_being_released(self):
+        self.bump_beta()
+        git(self.repo, "tag", "beta/v2.1.0")
+        self.assertEqual(rp.release_for_tag(self.repo, "beta/v2.1.0", "HEAD").tag, "beta/v2.1.0")
+        (self.repo / "plugins/beta/notes.txt").write_text("later, same version")
+        self.commit("content only after the tag")
+        with self.assertRaises(ValueError):
+            rp.release_for_tag(self.repo, "beta/v2.1.0", "HEAD")  # same version, different payload
+        self.assertEqual(rp.release_for_tag(self.repo, "beta/v2.1.0", "HEAD~1").tag, "beta/v2.1.0")
+
     def run_draft(self, state):
         """Run draft_release with git real and gh faked; `state` is what `gh release view` answers."""
         self.bump_beta()

@@ -17,9 +17,11 @@ on:
 permissions:
   contents: read
 
-# One release run at a time.
+# One run per tag: with a shared group GitHub cancels a pending run when a newer one queues
+# (cancel-in-progress does not change that), so a third tag pushed during a run would cost
+# the second tag its draft. A rerun of the same tag still queues behind its first run.
 concurrency:
-  group: release
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
