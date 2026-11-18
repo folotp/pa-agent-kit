@@ -44,8 +44,10 @@ Read back an App's real permissions after any change on its settings page:
 The wrapper mints a token for that one repository, sets the bot as git author
 and committer, points git and `gh` at the token (stored credentials are
 bypassed, `git@github.com:` remotes are rewritten to HTTPS), runs the command,
-then revokes the token. Commit inside the wrapper so the commit carries the
-bot identity:
+then revokes the token. The revocation is an exit trap set right after the
+token is minted, so a failing command, an error of the script or Ctrl-C revoke
+it too; the command's exit status is kept. Commit inside the wrapper so the
+commit carries the bot identity:
 
 ```bash
 ~/Developer/pa-agent-kit/harness/gh-token.sh claude -- git commit -m "feat: ..."
@@ -54,11 +56,16 @@ bot identity:
 Other modes:
 
 ```bash
-gh-token.sh claude --info   # expiry, permissions and scope as JSON; the token is revoked, never printed
-gh-token.sh claude          # prints a one-hour token on stdout, for a tool that needs it raw
+gh-token.sh claude --read-only -- ./dev deploy   # every permission narrowed to read: the release gate's call
+gh-token.sh claude --info      # expiry, permissions and scope as JSON; the token is revoked, never printed
+gh-token.sh claude --print     # prints a one-hour token on stdout, for a tool that needs it raw; not revoked
 ```
 
-Prefer the `--` form: the token never reaches the agent's transcript.
+With no mode (`gh-token.sh claude` alone) the script prints its usage and
+exits 2: printing a token is asked for by name, never a default (session 24c,
+finding K24). Prefer the `--` form: the token never reaches the agent's
+transcript. `--read-only` asks GitHub for every permission the installation
+holds at level read; `--info --read-only` shows the result.
 
 ## Run one command as PA
 
@@ -69,6 +76,13 @@ Prefer the `--` form: the token never reaches the agent's transcript.
 macOS shows a Keychain prompt. PA clicks **Allow** (never **Always Allow**).
 Deny exits non-zero and nothing runs. Agents ask PA before running this form,
 naming the exact command; PA answers the prompt.
+
+**Reach of owner mode.** The script exports PA's token (`GH_TOKEN` and the git
+credential entries) to the command and to everything that command starts, for
+as long as they run. Nothing here narrows or revokes it: it is PA's long-lived
+token, so the command must be a single, named operation (`gh pr merge 123`),
+never a shell (`bash -c …`) or a tool that runs other code (a build, a test
+suite, `./dev`).
 
 ## One-time setup (PA)
 

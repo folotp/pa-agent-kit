@@ -6,19 +6,16 @@
 # released only through a Keychain item that prompts on every read, for one
 # command at a time. See harness/gh-token.md for setup and the routine.
 #
-# Usage:
-#   gh-token.sh <app> [--repo OWNER/NAME]            print a token on stdout
-#   gh-token.sh <app> [--repo OWNER/NAME] --info     print expiry and scope, no token
-#   gh-token.sh <app> [--repo OWNER/NAME] -- CMD...  run CMD as the bot, then revoke
-#   gh-token.sh pa -- CMD...                         run CMD with PA's token (prompts)
-#
-# <app> is one of: claude, codex, antigravity.
-# --repo defaults to the origin remote of the current directory.
-# --read-only narrows every permission of the token to read (the release gate's reads).
+# Usage: see usage() below (also printed by -h).
 #
 # Secrets: the App key and every token stay in shell variables and pipes.
 # Nothing is written to disk, nothing is logged, and no error message
 # includes a key or a token (only HTTP status and GitHub's own message).
+# A token minted for --info or -- CMD is revoked by an exit trap set right
+# after minting, so an error or Ctrl-C revokes it too. A --print token is
+# the caller's, never revoked here: it expires within the hour.
+# Owner mode (pa -- CMD) exports PA's token to CMD and everything CMD
+# starts, for as long as they run; nothing here can narrow or revoke it.
 set -euo pipefail
 
 readonly API="https://api.github.com"
@@ -40,8 +37,28 @@ app_client_id() {
 die() { printf 'gh-token: %s\n' "$*" >&2; exit 1; }
 
 usage() {
-  sed -n '9,17p' "$0" | sed 's/^# \{0,1\}//' >&2
+  cat >&2 <<'EOF'
+Usage:
+  gh-token.sh <app> [--repo OWNER/NAME] [--read-only] -- CMD...  run CMD as the bot, then revoke
+  gh-token.sh <app> [--repo OWNER/NAME] [--read-only] --info     print expiry and scope, no token
+  gh-token.sh <app> [--repo OWNER/NAME] [--read-only] --print    print a token on stdout (never revoked here)
+  gh-token.sh pa -- CMD...                         run CMD with PA's token (prompts)
+
+<app> is one of: claude, codex, antigravity.
+--repo defaults to the origin remote of the current directory.
+--read-only narrows every permission of the token to read (the release gate's reads).
+EOF
   exit 2
+}
+
+# The token minted for --info or -- CMD, revoked by the exit trap (revoke_minted).
+minted_token=""
+revoke_minted() {
+  [[ -n $minted_token ]] || return 0
+  # In a subshell: a failed request (api dies) must not replace the command's exit status.
+  (api DELETE /installation/token token "$minted_token" >/dev/null) ||
+    printf 'gh-token: revoke failed; the token expires within the hour\n' >&2
+  minted_token=""
 }
 
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
@@ -51,7 +68,8 @@ b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 # On failure, prints only the HTTP status and GitHub's "message" field.
 api() {
   local method=$1 path=$2 scheme=$3 cred=$4 body=${5:-} out status
-  local -a args=(-sS -X "$method" -H @- -H "Accept: application/vnd.github+json"
+  # --max-time: a request that hangs ends in a refusal, not a stuck command (Codex C23).
+  local -a args=(-sS --max-time 30 -X "$method" -H @- -H "Accept: application/vnd.github+json"
                  -H "X-GitHub-Api-Version: 2022-11-28" -w '\n%{http_code}')
   [[ -n $body ]] && args+=(-H "Content-Type: application/json" --data "$body")
   out=$(printf 'Authorization: %s %s\n' "$scheme" "$cred" | curl "${args[@]}" "$API$path") \
@@ -129,7 +147,7 @@ run_as_pa() {
 main() {
   [[ $# -ge 1 ]] || usage
   local app=$1; shift
-  local repo="" mode=print read_only=""
+  local repo="" mode="" read_only=""
   case $app in -h|--help) usage ;; esac
 
   if [[ $app == pa ]]; then
@@ -141,12 +159,15 @@ main() {
   while [[ $# -gt 0 ]]; do
     case $1 in
       --repo) repo=${2:?--repo needs OWNER/NAME}; shift 2 ;;
-      --info) mode="info"; shift ;;
+      --info) [[ -z $mode ]] || usage; mode="info"; shift ;;
+      --print) [[ -z $mode ]] || usage; mode="print"; shift ;;
       --read-only) read_only=1; shift ;;
-      --) mode="exec"; shift; break ;;
+      --) [[ -z $mode ]] || usage; mode="exec"; shift; break ;;
       *) usage ;;
     esac
   done
+  # Printing a token is never the default: it needs --print (finding K24).
+  [[ -n $mode ]] || usage
   [[ $mode != exec || $# -gt 0 ]] || die "no command after --"
 
   local client_id key_b64 pem jwt install_json install_id token_json token slug bot_id
@@ -166,21 +187,28 @@ main() {
   install_id=$(printf '%s' "$install_json" | jq -r '.id')
   token_json=$(api POST "/app/installations/$install_id/access_tokens" Bearer "$jwt" \
     "$(token_request "${repo#*/}" "$install_json" "$read_only")")
-
-  if [[ $mode == info ]]; then
-    # Scope and expiry only: the token itself is dropped, then revoked.
-    printf '%s' "$token_json" | jq --arg app "$app" --arg repo "$repo" \
-      '{app: $app, repo: $repo, expires_at, permissions, repository_selection}'
-    api DELETE /installation/token token "$(printf '%s' "$token_json" | jq -r '.token')" >/dev/null
-    return 0
-  fi
-
   token=$(printf '%s' "$token_json" | jq -r '.token')
-  unset token_json
+  [[ -n $token && $token != null ]] || die "GitHub returned no token"
+
   if [[ $mode == print ]]; then
+    unset token_json
     printf '%s\n' "$token"
     return 0
   fi
+
+  # From here on, every exit revokes the token: an error, Ctrl-C, or the end.
+  minted_token=$token
+  trap revoke_minted EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
+  if [[ $mode == info ]]; then
+    # Scope and expiry only: the token itself is never printed.
+    printf '%s' "$token_json" | jq --arg app "$app" --arg repo "$repo" \
+      '{app: $app, repo: $repo, expires_at, permissions, repository_selection}'
+    return 0
+  fi
+  unset token_json
 
   # exec: commit as the bot, run the command, revoke the token afterwards.
   slug=$(api GET /app Bearer "$jwt" | jq -r '.slug')
@@ -194,7 +222,7 @@ main() {
 
   local rc=0
   "$@" || rc=$?
-  api DELETE /installation/token token "$token" >/dev/null || printf 'gh-token: revoke failed; the token expires within the hour\n' >&2
+  revoke_minted
   unset token GH_TOKEN
   return "$rc"
 }
