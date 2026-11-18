@@ -1,6 +1,6 @@
 # Templates for consumer repositories
 
-Copied into a consumer by the core sync (session 22 onward). One authoritative text each; consumers never edit the shared parts.
+Copied into a consumer by `./dev sync`. One authoritative text each; consumers never edit the shared parts.
 
 | Template | Lands as | Rule |
 |---|---|---|

@@ -111,6 +111,21 @@ EOF
   done
 }
 
+# A repository that syncs the core holds it in .harness/ with a CHECKSUMS file (written by
+# `./dev sync`). Any changed, missing or extra file there is drift. This detects an accident or a
+# hand edit; it is not protection, since an agent could change the file and its checksum together.
+verify_core() {
+  [ -d .harness ] || return 0
+  [ -f .harness/CHECKSUMS ] || die ".harness/CHECKSUMS is missing: re-sync the core (./dev sync in the workshop)"
+  local sum listed present
+  if command -v sha256sum >/dev/null 2>&1; then sum="sha256sum"; else sum="shasum -a 256"; fi
+  (cd .harness && $sum -c --quiet CHECKSUMS >/dev/null 2>&1) ||
+    die ".harness differs from its CHECKSUMS (changed or missing file: $(cd .harness && $sum -c CHECKSUMS 2>/dev/null | grep -v ': OK$' | tr '\n' ' '))"
+  listed="$(awk '{print $2}' .harness/CHECKSUMS | LC_ALL=C sort)"
+  present="$(cd .harness && find . -type f ! -name CHECKSUMS | sed 's|^\./||' | LC_ALL=C sort)"
+  [ "$listed" = "$present" ] || die ".harness has files that CHECKSUMS does not list (or lacks listed ones): re-sync the core"
+}
+
 # Printed by check and at the start of ci, so that every log carries the resolved versions.
 print_tools() {
   local t
@@ -126,6 +141,7 @@ case "$cmd" in
   check)
     [ "$#" -eq 1 ] || die "usage: ./dev check"
     verify_tools
+    verify_core
     print_tools
     # The repository's own offline check (harness.toml `check`): it must contact nothing.
     if [ -n "$check_command" ]; then
@@ -135,6 +151,7 @@ case "$cmd" in
   ci)
     [ "$#" -eq 1 ] || die "usage: ./dev ci"
     verify_tools
+    verify_core
     print_tools
     if [ -n "$check_command" ]; then
       echo "== check"
