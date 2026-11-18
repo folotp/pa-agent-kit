@@ -11,6 +11,13 @@ Merging a version bump is the release.
 
 To preview what a run would do, start the workflow by hand: `gh workflow run release.yml -f base=<commit before the change>`. `dry_run` is on by default and prints the plan without creating a tag or release. Locally: `python3 scripts/release-plugins.py --base <commit> --dry-run`.
 
+The workflow refuses before tagging anything (session 24b, K8):
+
+- in both modes, when `base` does not resolve to a commit: an unknown base would make every plugin look changed (a push with no previous commit, all zeros, releases nothing);
+- in write mode (a push, or a dispatch with `dry_run` off), when the run's ref is not `refs/heads/main` or its commit is not on `origin/main`: a dispatch from another branch would otherwise tag that branch's unmerged versions.
+
+Agents create releases as drafts only: the guard denies `gh release create` without `--draft`, `--draft=false` and a `gh api` release write without `draft=true` (`docs/harness-core.md`, 'Guard'). Publishing (step 4) is PA's. Tags themselves are not yet ruled: session 25 adds a tag ruleset on `*/v*`, `harness-v*` and `stable` that restricts creating, moving and deleting them to PA.
+
 ### The `.plugin` zips
 
 The zip carries a plugin's payload with the plugin root at the archive root; it is how skills are loaded by hand in the Gemini app. Selection: the plugin's `config/package-files.json` when it exists (an allowlist of files and directories), otherwise every tracked file; development configuration (`.claude`, `.codex`, `.agents`, `.github`, `tests`) never ships. It is built from a git revision, not the working tree, so local files cannot leak in. Entries are sorted with fixed timestamps, so two builds of one commit give the same bytes on the same Python and zlib (across other zlib versions the compressed bytes may differ while the contents stay the same).
@@ -25,7 +32,7 @@ If a run fails halfway, rerun it: tags that already exist are skipped. Design an
 
 Installs follow the default branch unless you pin them. `stable` is a moving tag that PA points at a commit PA has checked; installs that use it change only when the tag moves.
 
-Create or move the tag (it has no release, so it is not immutable):
+Create or move the tag (it has no release, so it is not immutable). PA runs this, in PA's own terminal: the guard denies the force push to an agent, and the tag ruleset of session 25 will refuse it to the bots:
 
 ```text
 git tag -f stable <commit> && git push -f origin refs/tags/stable

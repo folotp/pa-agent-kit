@@ -23,9 +23,11 @@ jobs:
       # sha256 of the linux-x64 binary, from SHASUMS256.txt of the mise release
       MISE_SHA256: f13f3e5ec88807e0161669b3aa07a91d84478cdf1e95b5b92b63f85a25d42395
     steps:
+      # The job token can write contents, so it stays out of .git/config and out of the steps
+      # that download tools or fetch upstream pages; only the last step holds it (session 24, K11).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: true # the push below needs the job token
+          persist-credentials: false
 
       - name: Install pinned mise
         run: |
@@ -36,9 +38,8 @@ jobs:
           install -m 0755 mise "$HOME/.local/bin/mise"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      # No token: mise.lock pins direct release URLs, so the downloads need no API rate limit.
       - name: Install pinned tools
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: ./dev setup
 
       - name: Resolve sources
@@ -64,7 +65,18 @@ jobs:
           git switch -c "$branch"
           git add specs.lock
           git commit -m "chore: bump specs.lock"
-          git push origin "$branch"
+          # The branch carries the lock and nothing else: a step that changed another file (a
+          # tool, an upstream page) cannot get it pushed with the write token.
+          changed="$(git diff --name-only origin/main...HEAD)"
+          if ! [ "$changed" = "specs.lock" ]; then
+            echo "::error::the bump branch would change more than specs.lock:"
+            printf '%s\n' "$changed"
+            exit 1
+          fi
+          # The token goes in as a header for this one command, as actions/checkout would set it.
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/$branch"
           {
             echo "Weekly re-resolution of the watched specifications moved:"
             echo

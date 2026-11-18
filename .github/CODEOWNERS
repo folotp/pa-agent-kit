@@ -1,0 +1,4 @@
+# PA owns every path. This takes effect when branch protection on main turns on 'Require review
+# from Code Owners' (session 25): a PR then needs PA's approval, and a bot's approval does not
+# count (session 24, K2). See docs/protected-main.md.
+* @folotp

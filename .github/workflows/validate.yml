@@ -10,8 +10,8 @@ permissions:
   contents: read
 jobs:
   validate:
-    # This display name is the required main-protection context.
-    name: Marketplace validation
+    # Not the required context itself: `gate` below is, and it needs this job to succeed.
+    name: Core checks
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -44,9 +44,28 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./dev ci
 
+  # A PR that changes files under plugins/<name>/ must bump that plugin's version: merging a
+  # bump is the release, and PA's installs follow main (session 24, K5). PRs only: a push to main
+  # has no base to compare with. Stdlib Python, the runner's own.
+  version-bump:
+    name: Version bump
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Changed plugins carry a version bump
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 -B scripts/check-version-bump.py --base "$BASE_SHA" --head HEAD
+
   # Path filters: a plugin's own checks run only when files under plugins/<name>/ change.
-  # `validate` above always runs (it is the required check). To add a plugin's checks, add an
-  # output here and a job gated on it; a skipped job counts as passing for branch protection.
+  # To add a plugin's checks, add an output here, a job gated on it, and the job to `gate`'s
+  # needs. projectionlab and session-telemetry hold skills and a manifest only, no code or
+  # tests: `./dev ci` validates their manifests, so they have no job (docs/protected-main.md).
   # Plain `git diff` instead of a third-party filter action: no dependency to pin.
   changes:
     name: Changed plugins
@@ -109,3 +128,25 @@ jobs:
       - name: Unit tests
         working-directory: plugins/pa-toolkit
         run: python3 -B -m unittest discover -s tests -v
+
+  # The one required main-protection context (session 24, K4): branch protection names this
+  # display name, so keep the two aligned. It runs after every other job, also when one failed,
+  # and fails unless the core checks and the change filter succeeded and every other job
+  # succeeded or was skipped (a plugin job is skipped when its plugin did not change, the version
+  # check outside pull requests). Add each new job to `needs`.
+  gate:
+    name: Marketplace validation
+    if: always()
+    needs: [validate, changes, version-bump, plugin-organon, plugin-pa-toolkit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed or was skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          printf '%s' "$NEEDS" | jq -e '
+            (.validate.result == "success") and (.changes.result == "success")
+            and ([.[] | .result] | all(. == "success" or . == "skipped"))' >/dev/null
