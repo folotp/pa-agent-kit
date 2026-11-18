@@ -101,19 +101,31 @@ class AggregateRuleTest(unittest.TestCase):
 class WriteTokenWorkflowTest(unittest.TestCase):
     """release.yml and specs-bump.yml hold a contents-write token: keep it narrow (K8, K11)."""
 
-    def test_release_refuses_a_bad_base_and_any_run_off_main(self):
+    def test_release_writes_only_for_a_pushed_tag_on_main(self):
         text = (WORKFLOWS / "release.yml").read_text()
+        # Read-only by default: the write token is granted to one job, and only there.
+        self.assertRegex(text, r"(?m)^permissions:\n  contents: read$")
+        self.assertEqual(len(re.findall(r"contents: write", text)), 1)
         release = jobs(text)["release"]
-        # Codex C1: the job holds the write token in both modes, so it starts only on main.
-        self.assertRegex(release, r"(?m)^    if: github\.ref == 'refs/heads/main'$")
-        self.assertIn('git rev-parse --verify --quiet "$BASE^{commit}"', release)
-        self.assertIn('[ "$GITHUB_REF" = refs/heads/main ]', release)
-        self.assertIn('git merge-base --is-ancestor "$GITHUB_SHA" origin/main', release)
-        # The refusals hold in both modes: none sits under the dry-run test.
+        self.assertIn("contents: write", release)
+        self.assertRegex(release, r"(?m)^    if: github\.ref_type == 'tag'$")
+        # A tag on an unmerged commit would run unreviewed code with the token (Codex C1).
         script = release.index("python3 scripts/release-plugins.py")
-        self.assertNotIn('if [ "$DRY_RUN" != "true" ]', release[:script])
-        # The refusals come before the script that tags.
-        self.assertLess(release.index("refs/heads/main ]"), script)
+        self.assertIn('git merge-base --is-ancestor "$GITHUB_SHA" origin/main', release[:script])
+        # The tag name reaches the shell through the environment, never by interpolation.
+        self.assertNotRegex(release, r"run:[^\n]*\$\{\{")
+        self.assertIn('--tag "$TAG"', release)
+        # One concurrency group per tag: a shared group cancels a pending run (Codex, PR 97).
+        self.assertRegex(text, r"(?m)^  group: release-\$\{\{ github\.ref \}\}$")
+        self.assertIn("cancel-in-progress: false", text)
+        # The script never creates a tag: PA does (tag ruleset, session 25).
+        self.assertNotIn("git push", release)
+
+    def test_release_preview_has_no_write_token_and_runs_from_main(self):
+        preview = jobs((WORKFLOWS / "release.yml").read_text())["preview"]
+        self.assertNotIn("contents: write", preview)
+        self.assertRegex(preview, r"github\.ref == 'refs/heads/main'")
+        self.assertIn('git rev-parse --verify --quiet "$BASE^{commit}"', preview)
 
     def test_specs_bump_keeps_no_credential_and_pushes_the_lock_only(self):
         text = (WORKFLOWS / "specs-bump.yml").read_text()
