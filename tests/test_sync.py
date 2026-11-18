@@ -34,6 +34,9 @@ class SyncTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.workshop = self.tmp / "workshop"
         shutil.copytree(ROOT / "harness", self.workshop / "harness", ignore=shutil.ignore_patterns("__pycache__"))
+        # A tracked file under harness/ that core.files does not name must never reach a consumer.
+        (self.workshop / "harness" / "scripts").mkdir()
+        (self.workshop / "harness" / "scripts" / "unlisted.py").write_text("print('not core')\n")
         (self.workshop / "tools" / "sync").mkdir(parents=True)
         shutil.copy2(ROOT / "tools" / "sync" / "sync.py", self.workshop / "tools" / "sync" / "sync.py")
         git(self.workshop, "init", "-q", "-b", "main")
@@ -61,7 +64,7 @@ class SyncTest(unittest.TestCase):
         for name in ("dev", "conf.awk", "gate", "guard", "core.files", "bindings/.claude/settings.json", "templates/AGENTS.shared.md"):
             self.assertEqual((self.consumer / ".harness" / name).read_bytes(), (ROOT / "harness" / name).read_bytes(), name)
         self.assertTrue(os.access(self.consumer / ".harness" / "dev", os.X_OK))
-        self.assertFalse((self.consumer / ".harness" / "scripts").exists(), "toolkit Python is not core")
+        self.assertFalse((self.consumer / ".harness" / "scripts").exists(), "a file core.files does not name is not core")
         lines = (self.consumer / ".harness" / "CHECKSUMS").read_text().splitlines()
         self.assertIn(
             f"{hashlib.sha256((ROOT / 'harness' / 'guard').read_bytes()).hexdigest()}  guard", lines)
