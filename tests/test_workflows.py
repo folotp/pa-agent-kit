@@ -2,9 +2,12 @@
 
 Text checks, no YAML parser (stdlib only): they read the job ids at two-space
 indentation under `jobs:` and a few literal settings. actionlint (in `./dev ci`)
-checks the syntax; these check the repository's own contracts.
+checks the syntax; these check the repository's own contracts. The aggregate's
+pass rule is also run, with jq, on the results GitHub would hand it.
 """
+import json
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -40,6 +43,59 @@ class ValidateWorkflowTest(unittest.TestCase):
         self.assertIn('.validate.result == "success"', gate)
         self.assertIn('.changes.result == "success"', gate)
         self.assertIn('all(. == "success" or . == "skipped")', gate)
+
+
+class AggregateRuleTest(unittest.TestCase):
+    """Runs the aggregate's own jq rule, read from validate.yml, on the `needs` results
+    GitHub would pass it: a failed or cancelled job must fail the required check.
+
+    GitHub skips a job whose dependency failed, and branch protection counts a skipped
+    required check as passing. `if: always()` makes the aggregate run anyway; this rule is
+    what then turns a red plugin check into a red `Marketplace validation`. Needs jq on
+    the system PATH, as the runner and the guard tests do.
+    """
+
+    CORE = ("validate", "changes")
+
+    def setUp(self):
+        gate = jobs((WORKFLOWS / "validate.yml").read_text())["gate"]
+        self.rule = re.search(r"jq -e '(.*?)'", gate, re.S).group(1)
+        self.needs = [n.strip() for n in re.search(r"^    needs: \[(.*)\]$", gate, re.M).group(1).split(",")]
+
+    def gate_passes(self, **results):
+        """True when the rule accepts `needs` where every job succeeded except `results`."""
+        needs = {job: {"result": results.get(job.replace("-", "_"), "success"), "outputs": {}} for job in self.needs}
+        run = subprocess.run(
+            ["jq", "-e", self.rule], input=json.dumps(needs), capture_output=True, text=True,
+            env={"PATH": "/usr/bin:/bin"}, timeout=30,
+        )
+        self.assertIn(run.returncode, (0, 1), run.stderr)
+        return run.returncode == 0
+
+    def test_every_job_green_passes(self):
+        self.assertTrue(self.gate_passes())
+
+    def test_a_failed_or_cancelled_job_fails_the_required_check(self):
+        for job in self.needs:
+            for result in ("failure", "cancelled"):
+                with self.subTest(job=job, result=result):
+                    self.assertFalse(self.gate_passes(**{job.replace("-", "_"): result}))
+
+    def test_a_skipped_plugin_or_version_job_passes(self):
+        # A plugin job is skipped when its plugin did not change; the version check outside PRs.
+        for job in self.needs:
+            if job not in self.CORE:
+                with self.subTest(job=job):
+                    self.assertTrue(self.gate_passes(**{job.replace("-", "_"): "skipped"}))
+
+    def test_a_skipped_core_or_filter_job_fails(self):
+        # When the filter fails, GitHub skips every plugin job: the filter must have succeeded.
+        for job in self.CORE:
+            with self.subTest(job=job):
+                self.assertFalse(self.gate_passes(**{job: "skipped"}))
+
+    def test_a_red_plugin_check_blocks_even_when_the_others_were_skipped(self):
+        self.assertFalse(self.gate_passes(plugin_organon="failure", plugin_pa_toolkit="skipped", version_bump="skipped"))
 
 
 class WriteTokenWorkflowTest(unittest.TestCase):
