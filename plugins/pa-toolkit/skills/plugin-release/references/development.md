@@ -10,10 +10,11 @@ Read the repository [AGENTS.md](../../../AGENTS.md) first. It is the shared agen
 | `agents/plugin-release-executor.md` | Claude adapter; no independent copy of the release procedure |
 | `scripts/release.py` | Portable deterministic operations: identity, extension selection, preflight, verified archive and receipt |
 | `scripts/package.sh` | Low-level generic ZIP implementation; no release authorization or source-validation contract |
-| `scripts/branch-guard.py` | Generic main/detached/pre-push guards; toolkit scripts/dev reuses push policy and supplies stronger index checking |
+| `scripts/branch-guard.py` | Generic main/detached/pre-push guards for the release driver; the workshop's own guard is `harness/guard` |
 | `tests/test_release.py` | Disposable extension/fallback fixtures, null/malformed configuration, literal braces and output propagation |
 | `tests/test_branch_guard.py` | Main/detached commits and remote destination guards |
-| `.github/workflows/release-checks.yml` | Full toolkit gate and actual extension archive on Linux/macOS for PRs and main pushes |
+| `config/release.json` | This plugin's extension: preflight runs the unit tests, package builds the `.plugin` with the workshop's `scripts/plugin_zip.py` (run with the plugin root as working directory) |
+| workshop `.github/workflows/validate.yml`, job `plugin-pa-toolkit` | Unit tests of this plugin on Linux when it changes; part of the required `Marketplace validation` check |
 
 General orchestration stays here. Toolkit and Organon each own their allowlist and shared checks through repository extensions; marketplace owns its manifests, bot and validator. Do not hardcode a plugin identity/path into the generic driver or copy the runbook into another repository.
 
@@ -41,19 +42,20 @@ The generic release implementation remains Python 3.9+ standard library, with Gi
 Bash, jq, zip, unzip and (for fallback extraction) tar. Consumer repositories define
 their additional gates through the generic extension, never inside this driver.
 
-This toolkit's own development uses the locked environment and complete shared gate
-described in its [development runbook](https://github.com/folotp/pa-toolkit/blob/main/docs/development.md).
-Run `./scripts/dev check`, which includes:
+This plugin is developed in the workshop. Run `./dev check` from the workshop root before
+committing and `./dev ci` before pushing (`./dev setup` installs the pinned tools). The tests
+themselves are:
 
 ```sh
-python3 -m unittest discover -s tests -v
+python3 -B -m unittest discover -s tests -v
 ```
 
-Here the interpreter is the managed Python. `uv run --locked python -m unittest
-discover -s tests -v` is the explicit equivalent. Python/YAML/Markdown development
-dependencies are not runtime requirements of the distributed generic driver.
-
-Required contexts are `Release checks (ubuntu-latest)` and `Release checks (macos-latest)`. Merged-main commits run the full toolkit extension and verify a real archive. PRs may omit unaffected code/tests only with compatible successful main-push baseline proof; required structural/freshness gates and affected runtime archive checks remain. Missing proof runs the full extension. See the [selection contract](https://github.com/folotp/pa-toolkit/blob/main/docs/shared-devtools.md). Workflow permissions are read-only. Naming a workflow does not configure protection: require PRs, strict/up-to-date checks and admin enforcement separately, disallowing force pushes/deletion. Do not rename a required context without coordinating its server setting. The toolkit shared gate now validates all Python/shell source, including the initial explicit formatting migration of the generic packager and tests.
+run from `plugins/pa-toolkit/`, which is also what the `plugin-pa-toolkit` job runs on Linux.
+The required context is the workshop's single `Marketplace validation`; it fails when this job
+fails, and a change under `plugins/pa-toolkit/` also needs a version bump. The standalone
+toolkit repository's `Release checks (ubuntu-latest)` / `(macos-latest)` contexts, its
+`scripts/dev` and its `release-checks.yml` no longer exist for this plugin. Workflow permissions
+are read-only; the release itself is the workshop's tag-triggered `release.yml`.
 
 Add focused behavioral regressions when changing a contract: extension and fallback, dry-run and build, failure propagation and receipt/path handling. Run the actual selected repository's dry-run from a clean worktree for cross-repository integration. Do not dispatch a marketplace bump or publish a test release to verify the driver. Optional Claude compatibility validation is distinct from portable mandatory tests; legacy Claude skill fields are not assumed valid under an unrelated portable schema.
 

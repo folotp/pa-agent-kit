@@ -27,32 +27,21 @@ Code must explain its own intent through precise names, coherent functions and e
 
 Read `skills/plugin-release/references/development.md` for architecture, extension/receipt contracts, tests and CI. The canonical general release procedure is `skills/plugin-release/references/runbook.md`; the Claude executor is an adapter. Run `python3 -m unittest discover -s tests -v` before committing release infrastructure changes. Use one named branch/worktree per editing agent and merge through a PR. Do not publish, tag or change marketplace pins without an authorized release request.
 
-## Shared development interface
+## Development in the workshop
 
-Use `./scripts/dev doctor`, `./scripts/dev check` and `./scripts/dev check --staged`.
-Run the full gate before committing; Git validates the actual index separately.
-`./scripts/dev format` is an explicit source write. Lifecycle feedback never formats.
-Create worktrees with `./scripts/dev worktree feat/example /explicit/path`; start
-a supported client with `./scripts/dev session claude|codex|antigravity` from that checkout, including
-when invoking the launcher from a subdirectory. Preserve other sessions' checkouts.
+This plugin lives in the `pa-marketplace` workshop (checkout `pa-agent-kit`, `plugins/pa-toolkit/`).
+Its development gate is the workshop's, not a script of this plugin: run `./dev check` from the
+workshop root before committing and `./dev ci` before pushing (`./dev setup` installs the pinned
+tools). The `plugin-pa-toolkit` job of the workshop's `validate.yml` runs this plugin's unit tests
+(`python3 -B -m unittest discover -s tests -v` from `plugins/pa-toolkit/`) when the plugin changes;
+it is part of the required `Marketplace validation` check. A change under `plugins/pa-toolkit/`
+carries a version bump (`scripts/check-version-bump.py`).
 
-Development uses locked Python dependencies (`uv sync --locked`), Bash 3.2-compatible
-shell code and the supported tools in `config/toolchain.json`. Launcher Python 3.9+
-and managed project Python 3.11-3.15 are distinct. No development gate needs a vault,
-finance service, installed AI client or installed Git hook. Missing required tools,
-blocked caches/network and unavailable checks fail with a setup remedy.
-
-Architecture, setup, CI ownership, client limits and recovery are maintained in the
-[development architecture](https://github.com/folotp/pa-toolkit/blob/main/docs/development-architecture.md),
-[development runbook](https://github.com/folotp/pa-toolkit/blob/main/docs/development.md)
-and [hook scope](https://github.com/folotp/pa-toolkit/blob/main/docs/hook-scope.md).
-Maintain source contracts, tests and these documents in the same PR.
-
-`./scripts/dev install-hooks` preflights pre-commit/pre-push, honors `core.hooksPath`
-and upgrades only exact recognized toolkit launchers. Shared hook installation
-also affects linked worktrees: older branches without the shared launcher fail
-closed. Preserve unmanaged hooks and compose manually using the development runbook.
-Do not install from a transient checkout without understanding that shared scope.
+The standalone toolkit repository's `scripts/dev` (doctor, check, format, worktree, session,
+install-hooks), its `release-checks.yml` workflow and its `docs/` were not carried into the
+workshop: this plugin has no `scripts/dev`, and the links to that repository's documents
+are historical. Worktree and hook setup now come from the workshop's core
+(`docs/harness-core.md`). Do not install the old toolkit's hooks from a transient checkout.
 
 Runtime files are explicitly selected by `config/package-files.json`. Update this
 inventory with runtime additions and verify a real archive through the generic
