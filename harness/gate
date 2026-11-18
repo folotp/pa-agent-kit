@@ -103,18 +103,79 @@ exec_clean() {
   exec "$@"
 }
 
+# mise only from its install locations, never PATH: sets mise_bin.
+mise_bin=""
+find_fixed_mise() {
+  local c
+  for c in /opt/homebrew/bin/mise /usr/local/bin/mise "$HOME/.local/bin/mise"; do
+    [ -x "$c" ] && mise_bin="$c" && return 0
+  done
+  die "mise not found (/opt/homebrew/bin, /usr/local/bin, ~/.local/bin). Install mise and retry."
+}
+
 # Stage 1: mise only from its install locations (never PATH), a system PATH, the named variables.
 # The second stage is marked by an argument, not by the environment.
 release_stage1() {
-  local mise_bin="" c
-  for c in /opt/homebrew/bin/mise /usr/local/bin/mise "$HOME/.local/bin/mise"; do
-    [ -x "$c" ] && mise_bin="$c" && break
-  done
-  [ -n "$mise_bin" ] || die "mise not found (/opt/homebrew/bin, /usr/local/bin, ~/.local/bin). Install mise and retry."
+  find_fixed_mise
   load_conf
   [ "$1" = "$conf_verb" ] || die "this repository releases with ./dev $conf_verb, not ./dev $1"
   export PATH=/usr/bin:/bin:/usr/sbin:/sbin
   exec_clean "PATH $keep_base $keep_gate $conf_keep_env" "$mise_bin" exec --locked -- "$self" --stage2 "$@"
+}
+
+# The exported GIT_CONFIG_* entries, as sorted NAME=VALUE lines.
+git_config_env() {
+  local v
+  for v in $(compgen -e); do
+    case "$v" in GIT_CONFIG_*) printf '%s=%s\n' "$v" "${!v}" ;; esac
+  done | LC_ALL=C sort
+}
+
+# The GIT_CONFIG_* entries that gh-token.sh exports for git to use the bot token: computed from
+# gh-token.sh itself, the one place that defines them.
+git_auth_entries() {
+  (
+    for v in $(compgen -e); do
+      case "$v" in GIT_CONFIG_*) unset "$v" ;; esac
+    done
+    # shellcheck disable=SC1091 # the core's own token script, beside this file
+    source "$here/gh-token.sh"
+    export_git_auth ""
+    git_config_env
+  )
+}
+
+# Stage 2's git reaches GitHub only through the entries gh-token.sh sets: the names stage 2 keeps
+# (GIT_CONFIG_COUNT, _KEY_n, _VALUE_n) must carry exactly those keys and values, no more, no fewer
+# (finding K10). Another credential helper, URL rewrite or option would otherwise pass by name.
+assert_git_auth() {
+  local current expected
+  expected="$(git_auth_entries)" || die "cannot read the git entries of $here/gh-token.sh"
+  current="$(git_config_env)"
+  [ "$current" = "$expected" ] ||
+    refuse "the GIT_CONFIG_* entries are not exactly the ones gh-token.sh sets: run it as $(basename "$here")/gh-token.sh claude --read-only -- ./dev $conf_verb"
+}
+
+# The mise configuration that stage 2 runs under may add nothing: no variable (an [env] section,
+# its _.file or _.source) and no PATH entry (_.path) other than the tools' own directories. mise
+# reads it from the repository, every parent directory and the global configuration, after the
+# clean re-run, so a variable stage 2 keeps by name (GH_TOKEN, a proxy) could come from there
+# (finding K10).
+assert_no_mise_env() {
+  local added paths bins p
+  find_fixed_mise
+  added="$("$mise_bin" env -D 2>/dev/null)" || refuse "mise cannot print the environment it adds"
+  [ -z "$added" ] ||
+    refuse "the mise configuration sets variables: $(printf '%s\n' "$added" | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' | tr '\n' ' ')(an [env] section; mise config ls names the files)"
+  paths="$("$mise_bin" env --paths 2>/dev/null)" || refuse "mise cannot print the PATH entries it adds"
+  bins="$("$mise_bin" bin-paths 2>/dev/null)" || refuse "mise cannot list its tool directories"
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    printf '%s\n' "$bins" | grep -Fqx -- "$p" ||
+      refuse "the mise configuration adds $p to PATH (an [env] _.path entry; mise config ls names the files)"
+  done <<EOF
+$paths
+EOF
 }
 
 # Stage 2 refuses any variable outside the named list: whatever the first stage dropped and came
@@ -401,7 +462,9 @@ release_stage2() {
   assert_clean_env
   [ "$1" = "$conf_verb" ] || die "this repository releases with ./dev $conf_verb, not ./dev $1"
   shift
+  assert_no_mise_env
   need_gh_token
+  assert_git_auth
   gate_all
   gate_since_last "$gate_sha"
   gate_guarded_diff "$gate_sha"

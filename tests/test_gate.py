@@ -459,7 +459,7 @@ class ScriptFixture:
         self.dir = Path(tempfile.mkdtemp(prefix="gate-script."))
         test.addCleanup(shutil.rmtree, self.dir, True)
         (self.dir / "harness").mkdir()
-        for name in ("gate", "conf.awk", "dev"):
+        for name in ("gate", "conf.awk", "dev", "gh-token.sh"):
             shutil.copy2(ROOT / "harness" / name, self.dir / "harness" / name)
         (self.dir / "harness.toml").write_text('profile = "live-config"\n' + toml)
         release = self.dir / "release.sh"
@@ -696,6 +696,57 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(order[-1], f"release {self.sha} GH_TOKEN=unset args=--mode x")
         last = (self.f.work / ".git" / "dev-deploy" / "last").read_text().strip()
         self.assertEqual(last, self.sha)
+
+    def trusted_config(self, path, text):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        mise = next(m for m in MISE_LOCATIONS if os.access(m, os.X_OK))
+        subprocess.run([mise, "trust", str(path)], env={**os.environ, "MISE_STATE_DIR": str(self.f.state)},
+                       capture_output=True, check=True)
+
+    def test_env_section_in_a_parent_directory_is_refused(self):
+        """K10: GH_TOKEN passes stage 2 by name, so a mise [env] above the repository could set it."""
+        self.trusted_config(self.f.dir / "mise.toml", '[env]\nGH_TOKEN = "planted"\n')
+        result = self.f.release()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("the mise configuration sets variables: GH_TOKEN", result.stderr)
+        self.assertEqual(self.f.order(), [])
+
+    def test_env_section_in_the_global_configuration_is_refused(self):
+        home = self.f.dir / "home"
+        (home / ".config" / "mise").mkdir(parents=True)
+        (home / ".config" / "mise" / "config.toml").write_text('[env]\nHTTPS_PROXY = "http://planted.invalid"\n')
+        result = self.f.release(HOME=str(home))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("the mise configuration sets variables: HTTPS_PROXY", result.stderr)
+
+    def test_path_entry_from_mise_configuration_is_refused(self):
+        self.trusted_config(self.f.dir / "mise.toml", '[env]\n_.path = ["/planted/bin"]\n')
+        result = self.f.release()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("adds /planted/bin to PATH", result.stderr)
+
+    def test_git_entries_other_than_the_token_scripts_are_refused(self):
+        cases = {
+            "altered helper": {"GIT_CONFIG_VALUE_0": "osxkeychain"},
+            "extra entry": {"GIT_CONFIG_COUNT": "4", "GIT_CONFIG_KEY_3": "http.proxy", "GIT_CONFIG_VALUE_3": "http://planted.invalid"},
+        }
+        for name, extra in cases.items():
+            with self.subTest(name):
+                result = self.f.release(**extra)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("not exactly the ones gh-token.sh sets", result.stderr)
+
+    def test_missing_git_entries_are_refused(self):
+        env = {k: v for k, v in git_auth_env().items() if k == "GH_TOKEN"}
+        result = subprocess.run(
+            [str(self.f.work / "dev"), "deploy"], cwd=self.f.work, capture_output=True, text=True, timeout=120,
+            start_new_session=True,
+            env={"HOME": os.environ["HOME"], "PATH": SYSTEM_PATH, "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
+                 "MISE_STATE_DIR": str(self.f.state), "MISE_DATA_DIR": str(self.f.data), "GATE_TEST_FIX": str(self.f.fix), **env},
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("not exactly the ones gh-token.sh sets", result.stderr)
 
     def test_refused_commit_runs_no_repository_code(self):
         self.f.github_ok(self.sha, merger="folotp-claude[bot]")
