@@ -1,0 +1,12 @@
+#!/bin/sh
+# Core git hook (finding K14). `./dev setup` installs it through core.hooksPath = <core>/githooks,
+# and `./dev check` refuses when that is not the active hooks path. Runs `./dev check`, so the
+# pinned tools resolve through mise even with a hook's minimal PATH, then the repository's own
+# `.githooks/pre-commit` when it has an executable one. Bypassable with --no-verify, which the
+# guard denies to agents: a convenience, not a control.
+root="$(git rev-parse --show-toplevel)" || exit 1
+"$root/dev" check || exit 1
+own="$root/.githooks/pre-commit"
+if [ -x "$own" ]; then
+  exec "$own" "$@"
+fi

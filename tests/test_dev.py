@@ -17,15 +17,20 @@ MINIMAL_PATH = "/usr/bin:/bin"
 MISE_LOCATIONS = ("/opt/homebrew/bin/mise", "/usr/local/bin/mise")
 
 
-def clean_env(**extra):
+def clean_env(hooks="harness/githooks", **extra):
     """Environment of a hook or scheduled job: minimal PATH, no DEV_UNDER_MISE.
 
     MISE_* and TMPDIR are passed through so that a sandboxed or relocated mise state still works.
+    With `hooks`, git sees core.hooksPath = `hooks` through its environment entries, as after
+    `./dev setup`, so these tests do not depend on how the clone running them was set up;
+    HooksTest covers the hooks themselves, from a fresh clone.
     """
     env = {"HOME": os.environ["HOME"], "PATH": MINIMAL_PATH}
     for name, value in os.environ.items():
         if name.startswith("MISE_") or name == "TMPDIR":
             env[name] = value
+    if hooks:
+        env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="core.hooksPath", GIT_CONFIG_VALUE_0=hooks)
     env.update(extra)
     return env
 
@@ -65,6 +70,17 @@ class DispatcherTest(unittest.TestCase):
         for tool in ("python3", "shellcheck", "actionlint"):
             line = next(l for l in result.stdout.splitlines() if l.startswith(tool))
             self.assertIn("/installs/", line)
+        # Report 2.4: each tool's resolved version, not only its path (Codex C23).
+        versions = dict(l.split()[:2] for l in result.stdout.splitlines() if l.split() and l.split()[0] in ("python3", "shellcheck", "actionlint"))
+        mise_toml = (ROOT / "mise.toml").read_text()
+        for tool, pinned in (("python3", "python"), ("shellcheck", "shellcheck"), ("actionlint", "actionlint")):
+            self.assertIn(f'{pinned} = "{versions[tool]}"', mise_toml)
+
+    def test_check_commands_run_with_pipefail(self):
+        """Codex C11: a failure early in a pipeline is not hidden by the last command."""
+        fixture = FixtureRepo(self, 'profile = "plugin"\ntools = ["python3"]\ncheck = "false | true"\n[checks]\na = "false | true"\n')
+        self.assertIn("check failed: false | true", run_dev(fixture.dir, "check", env=fixture.env).stderr)
+        self.assertIn("check failed: false | true", run_dev(fixture.dir, "ci", env=fixture.env).stderr)
 
     def test_x_runs_the_pinned_python(self):
         result = run_dev(ROOT, "x", "python3", "-c", "import sys; print(sys.version_info[:2])")
@@ -116,6 +132,11 @@ class DispatcherTest(unittest.TestCase):
             "unsupported value": 'profile = "plugin"\ntools = ["python3"]\n[checks]\na = 3\n',
             "unsupported line": 'profile = "plugin"\nnot toml\n',
             "a check is a string": 'profile = "plugin"\ntools = ["python3"]\n[checks]\na = ["x"]\n',
+            # Codex C12: nothing that would silently drop or split a check.
+            "blank value: a": 'profile = "plugin"\ntools = ["python3"]\n[checks]\na = "  "\n',
+            "blank array item, or whitespace in one: tools": 'profile = "plugin"\ntools = ["python3", ""]\n',
+            "or whitespace in one: tools": 'profile = "plugin"\ntools = ["python3", "a b"]\n',
+            "key given twice: a": 'profile = "plugin"\ntools = ["python3"]\n[checks]\na = "true"\na = "false"\n',
         }
         for message, text in cases.items():
             with self.subTest(message):
@@ -204,6 +225,64 @@ class VerbsAndCheckTest(unittest.TestCase):
         result = run_dev(fixture.dir, "ci", env=fixture.env)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertLess(result.stdout.index("OFFLINE-CHECK-RAN"), result.stdout.index("== first"))
+
+
+class HooksTest(unittest.TestCase):
+    """The core's git hooks (finding K14), from a fresh clone: `./dev check` names `./dev setup`
+    until it ran; setup sets core.hooksPath; pre-commit runs `./dev check`; pre-push refuses main
+    and master, then runs the repository's own `.githooks/pre-push` with the same ref lines."""
+
+    def git(self, cwd, *args, check=True):
+        return subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(cwd), *args],
+            env=self.env, capture_output=True, text=True, timeout=120, check=check,
+        )
+
+    def setUp(self):
+        source = FixtureRepo(self, 'profile = "plugin"\ntools = ["python3"]\ncheck = "echo CHECK-RAN"\n')
+        shutil.copytree(ROOT / "harness" / "githooks", source.dir / "harness" / "githooks")
+        own = source.dir / ".githooks" / "pre-push"
+        own.parent.mkdir()
+        own.write_text('#!/bin/sh\ncat >"$(git rev-parse --show-toplevel)/../own-hook.out"\n')
+        own.chmod(0o755)
+        self.dir = Path(tempfile.mkdtemp(prefix="dev-hooks."))
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.clone = self.dir / "clone"
+        self.env = clean_env(hooks=False, MISE_TRUSTED_CONFIG_PATHS=f"{source.dir}:{self.clone}")
+        self.git(source.dir, "init", "-q", "-b", "main")
+        self.git(source.dir, "add", "-A")
+        self.git(source.dir, "commit", "-q", "-m", "fixture")
+        self.git(self.dir, "clone", "-q", "--bare", str(source.dir), str(self.dir / "origin.git"))
+        self.git(self.dir, "clone", "-q", str(self.dir / "origin.git"), str(self.clone))
+
+    def test_fresh_clone_check_names_setup(self):
+        result = run_dev(self.clone, "check", env=self.env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("git hooks are not the core's (core.hooksPath is 'unset', not 'harness/githooks'): run ./dev setup", result.stderr)
+
+    def test_setup_installs_the_hooks_and_they_run(self):
+        result = run_dev(self.clone, "setup", env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("hooks        harness/githooks", result.stdout)
+        self.assertEqual(self.git(self.clone, "config", "--get", "core.hooksPath").stdout.strip(), "harness/githooks")
+        (self.clone / "a.txt").write_text("a\n")
+        self.git(self.clone, "add", "a.txt")
+        commit = self.git(self.clone, "commit", "-m", "change")
+        self.assertIn("CHECK-RAN", commit.stdout + commit.stderr)
+        for branch in ("main", "master"):
+            with self.subTest(branch):
+                push = self.git(self.clone, "push", "origin", f"HEAD:refs/heads/{branch}", check=False)
+                self.assertNotEqual(push.returncode, 0)
+                self.assertIn(f"pre-push: refused: push to {branch}", push.stderr)
+        self.assertFalse((self.dir / "own-hook.out").exists())
+        push = self.git(self.clone, "push", "origin", "HEAD:refs/heads/feature", check=False)
+        self.assertEqual(push.returncode, 0, push.stderr)
+        self.assertIn("refs/heads/feature", (self.dir / "own-hook.out").read_text())
+
+    def test_check_refuses_hooks_pointing_elsewhere(self):
+        self.git(self.clone, "config", "core.hooksPath", "/elsewhere/hooks")
+        result = run_dev(self.clone, "check", env=self.env)
+        self.assertIn("core.hooksPath is '/elsewhere/hooks'", result.stderr)
 
 
 if __name__ == "__main__":

@@ -6,13 +6,17 @@ tests run the real dispatcher of the synced consumer and need mise and the pinne
 tests/test_dev.py. Nothing touches this repository.
 """
 
+import contextlib
 import hashlib
+import importlib.util
+import io
 import os
 import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from test_dev import clean_env, run_dev
 
@@ -66,20 +70,56 @@ class SyncTest(unittest.TestCase):
         self.assertTrue(os.access(self.consumer / ".harness" / "dev", os.X_OK))
         self.assertFalse((self.consumer / ".harness" / "scripts").exists(), "a file core.files does not name is not core")
         lines = (self.consumer / ".harness" / "CHECKSUMS").read_text().splitlines()
-        self.assertIn(
-            f"{hashlib.sha256((ROOT / 'harness' / 'guard').read_bytes()).hexdigest()}  guard", lines)
-        self.assertIn("VERSION", " ".join(lines))
+        self.assertIn(f"755 {hashlib.sha256((ROOT / 'harness' / 'guard').read_bytes()).hexdigest()} guard", lines)
+        self.assertIn(f"644 {hashlib.sha256((ROOT / 'harness' / 'conf.awk').read_bytes()).hexdigest()} conf.awk", lines)
+        self.assertTrue(any(line.startswith("644 ") and line.endswith(" VERSION") for line in lines))
+        self.assertTrue(any(line.endswith(" githooks/pre-push") and line.startswith("755 ") for line in lines))
         self.assertIn("commit ", (self.consumer / ".harness" / "VERSION").read_text())
+
+    def test_files_are_read_by_the_resolved_commit(self):
+        """Codex C6: after resolving <rev> once, no git call names it again, so a tag that moves
+        during the run cannot give files that disagree with VERSION."""
+        spec = importlib.util.spec_from_file_location("fixture_sync", self.workshop / "tools" / "sync" / "sync.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        calls, real_git = [], module.git
+        module.git = lambda cwd, *args, **kw: calls.append(args) or real_git(cwd, *args, **kw)
+        # In this process, so git takes its identity from os.environ (CI has no global one).
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch.dict(os.environ, GIT_ENV):
+            self.assertEqual(module.main(["harness-v0.1", str(self.consumer)]), 0)
+        naming = [args for args in calls if any("harness-v0.1" in a for a in args)]
+        self.assertTrue(naming and all(args[0] == "rev-parse" for args in naming[:1]), naming)
+        self.assertEqual([a for a in naming if a[0] not in ("rev-parse", "switch", "commit")], [], naming)
+
+    def test_differing_root_file_is_refused_unless_kept(self):
+        """K22: a differing root file leaves part of the core unwired; sync says what, and stops."""
+        (self.consumer / ".claude").mkdir()
+        (self.consumer / ".claude" / "settings.json").write_text('{"own": true}\n')
+        (self.consumer / "dev").write_text("#!/bin/sh\necho own dev\n")
+        git(self.consumer, "add", "-A")
+        git(self.consumer, "commit", "-q", "-m", "own settings and dev")
+        refused = self.sync()
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn(".claude/settings.json: the core guard hook for Claude Code would stay unwired", refused.stderr)
+        self.assertIn("dev: the core dispatcher", refused.stderr)
+        self.assertIn("--keep-root <file>", refused.stderr)
+        self.assertEqual(git(self.consumer, "branch", "--list", "harness-sync/*").strip(), "", "nothing written")
+        self.assertFalse((self.consumer / ".harness").exists())
+        partly = self.sync("--keep-root", "dev")
+        self.assertEqual(partly.returncode, 1)
+        self.assertIn(".claude/settings.json", partly.stderr)
+        self.assertNotIn("dev: the core dispatcher", partly.stderr)
+        self.assertIn("names no root file", self.sync("--keep-root", "settings.json").stderr)
 
     def test_root_files_are_installed_only_where_absent_and_never_overwritten(self):
         (self.consumer / ".claude").mkdir()
         (self.consumer / ".claude" / "settings.json").write_text('{"own": true}\n')
         git(self.consumer, "add", "-A")
         git(self.consumer, "commit", "-q", "-m", "own settings")
-        result = self.sync()
+        result = self.sync("--keep-root", ".claude/settings.json")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.consumer / ".claude" / "settings.json").read_text(), '{"own": true}\n')
-        self.assertIn("`.claude/settings.json` DIFFERS", result.stdout)
+        self.assertIn("`.claude/settings.json` DIFFERS from the core template; kept by --keep-root, so the core guard hook for Claude Code stays unwired", result.stdout)
         self.assertTrue((self.consumer / "dev").is_file() and os.access(self.consumer / "dev", os.X_OK))
         self.assertTrue((self.consumer / ".codex" / "hooks.json").is_file())
         self.assertIn("`.claude/skills` is not the symlink", result.stdout)
@@ -116,7 +156,7 @@ class SyncTest(unittest.TestCase):
         (self.consumer / "harness.toml").write_text('profile = "plugin"\ntools = ["python3"]\n[checks]\nnone = "true"\n')
         for name in ("mise.toml", "mise.lock"):
             shutil.copy2(ROOT / name, self.consumer / name)
-        return clean_env(MISE_TRUSTED_CONFIG_PATHS=str(self.consumer))
+        return clean_env(hooks=".harness/githooks", MISE_TRUSTED_CONFIG_PATHS=str(self.consumer))
 
     def test_check_passes_on_a_clean_core_and_detects_every_kind_of_drift(self):
         env = self.synced_consumer_with_dispatcher()
@@ -126,17 +166,23 @@ class SyncTest(unittest.TestCase):
         guard.write_bytes(original + b"#")  # one byte
         result = run_dev(self.consumer, "check", env=env)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("differs from its CHECKSUMS", result.stderr)
-        self.assertIn("guard: FAILED", result.stderr)
+        self.assertIn("differs from its CHECKSUMS: guard (content)", result.stderr)
         guard.write_bytes(original)
         (self.consumer / ".harness" / "extra.sh").write_text("echo hi\n")
         self.assertIn("does not list", run_dev(self.consumer, "check", env=env).stderr)
         (self.consumer / ".harness" / "extra.sh").unlink()
+        (self.consumer / ".harness" / "link").symlink_to("guard")
+        self.assertIn("does not list", run_dev(self.consumer, "check", env=env).stderr)
+        (self.consumer / ".harness" / "link").unlink()
         guard.unlink()
-        self.assertNotEqual(run_dev(self.consumer, "check", env=env).returncode, 0)
-        guard.write_bytes(original)
+        self.assertIn("guard (missing)", run_dev(self.consumer, "check", env=env).stderr)
+        guard.write_bytes(original)  # back with the default mode, 644: not executable as recorded
+        self.assertIn("guard (mode)", run_dev(self.consumer, "check", env=env).stderr)
         guard.chmod(0o755)
         self.assertEqual(run_dev(self.consumer, "check", env=env).returncode, 0)
+        conf = self.consumer / ".harness" / "conf.awk"
+        conf.chmod(0o755)
+        self.assertIn("conf.awk (mode)", run_dev(self.consumer, "check", env=env).stderr)
 
 
 if __name__ == "__main__":

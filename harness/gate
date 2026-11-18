@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # gate: the release gate of the harness core, shared by every repository that changes a live
 # system. A commit is released only when the tree is clean, HEAD is the tip of main on GitHub, CI
-# is green for that exact commit, its PR was merged by PA, it descends from the last released
-# commit, and PA confirmed any change to the guarded files since then. Only then does the
-# repository's own release command run (it reads the credentials, behind a Keychain prompt).
+# is green for that exact commit, it descends from the last released commit and every change to
+# main since then is a PR merged by PA, and PA confirmed any change to the guarded files since
+# then. Only then does the repository's own check, then its release command, run (the release
+# command reads the credentials, behind a Keychain prompt).
 # Contract, settings and the refusal cases: docs/harness-core.md, 'Gate wrapper'.
 #
-# Usage, through ./dev:  ./dev gate [<sha>]            read-only, no credential
+# Usage, through ./dev:  ./dev gate [<sha>]            read-only (the bot's read-only token)
+#                        ./dev gate --baseline <sha>   PA's recovery of the last release record
 #                        ./dev <verb> [args…]          verb = apply or deploy (harness.toml)
 # Directly:              harness/gate tree             clean-tree check only, for a release command
 #
@@ -46,6 +48,9 @@ keep_added='PATH PWD OLDPWD SHLVL _ __CF_USER_TEXT_ENCODING __MISE_*'
 
 conf_repo="" conf_merger="" conf_verb="" conf_release="" conf_ci="" conf_checks_app=""
 conf_required="" conf_guarded="" conf_loaded="" conf_keep_env="" conf_tools=""
+# The same settings at the last release (read_old_settings); read by name, through ${!old}.
+# shellcheck disable=SC2034
+old_repo="" old_merger="" old_verb="" old_release="" old_ci="" old_checks_app="" old_required="" old_guarded="" old_loaded="" old_keep_env=""
 
 load_conf() {
   local parsed kind k v
@@ -65,13 +70,19 @@ EOF
   [[ "$conf_verb" =~ ^(apply|deploy)$ ]] || die "harness.toml [gate]: verb is apply or deploy, not '$conf_verb'"
   [[ "$conf_release" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "$conf_release" != *..* ]] && [ -x "$root/$conf_release" ] ||
     die "harness.toml [gate]: release '$conf_release' is not an executable file of the repository"
+  # Tracked, as a regular executable file (mode 100755), and not a symbolic link: what runs is
+  # what the clean-tree check and the guarded diff cover (Codex C12).
+  [ -f "$root/$conf_release" ] && [ ! -L "$root/$conf_release" ] &&
+    [ "$(git -C "$root" ls-files -s -- "$conf_release" | awk '{print $1}')" = 100755 ] ||
+    die "harness.toml [gate]: release '$conf_release' is not a tracked regular executable file (git mode 100755)"
   case "$conf_ci" in
     check-runs) [[ "$conf_checks_app" =~ ^[A-Za-z0-9-]+$ ]] || die "harness.toml [gate]: check-runs needs checks_app" ;;
     workflow-runs) [ -z "$conf_checks_app" ] || die "harness.toml [gate]: checks_app is for check-runs only" ;;
     *) die "harness.toml [gate]: ci is check-runs or workflow-runs, not '$conf_ci'" ;;
   esac
-  [[ "$conf_required" =~ ^[A-Za-z0-9._/\ -]+$ ]] || die "harness.toml [gate]: required lists at least one check"
-  [[ "$conf_guarded" =~ ^[A-Za-z0-9._/\ -]+$ ]] || die "harness.toml [gate]: guarded lists at least one path"
+  [[ "$conf_required" =~ ^[A-Za-z0-9._/\ -]+$ && "$conf_required" =~ [^\ ] ]] || die "harness.toml [gate]: required lists at least one check"
+  # Optional since the fixed set (fixed_guarded) is always guarded: only the repository's extras.
+  [[ "$conf_guarded" =~ ^[A-Za-z0-9._/\ -]*$ ]] || die "harness.toml [gate]: bad guarded '$conf_guarded'"
   [[ "$conf_loaded" =~ ^[A-Za-z0-9._/*?\ -]*$ ]] || die "harness.toml [gate]: bad loaded '$conf_loaded'"
   [[ "$conf_keep_env" =~ ^([A-Z_][A-Z0-9_]*\ ?)*$ ]] || die "harness.toml [gate]: bad keep_env '$conf_keep_env'"
   case " $conf_tools " in *" gh "*) ;; *) die "harness.toml: tools must include gh (the gate reads GitHub with it)" ;; esac
@@ -99,18 +110,79 @@ exec_clean() {
   exec "$@"
 }
 
+# mise only from its install locations, never PATH: sets mise_bin.
+mise_bin=""
+find_fixed_mise() {
+  local c
+  for c in /opt/homebrew/bin/mise /usr/local/bin/mise "$HOME/.local/bin/mise"; do
+    [ -x "$c" ] && mise_bin="$c" && return 0
+  done
+  die "mise not found (/opt/homebrew/bin, /usr/local/bin, ~/.local/bin). Install mise and retry."
+}
+
 # Stage 1: mise only from its install locations (never PATH), a system PATH, the named variables.
 # The second stage is marked by an argument, not by the environment.
 release_stage1() {
-  local mise_bin="" c
-  for c in /opt/homebrew/bin/mise /usr/local/bin/mise "$HOME/.local/bin/mise"; do
-    [ -x "$c" ] && mise_bin="$c" && break
-  done
-  [ -n "$mise_bin" ] || die "mise not found (/opt/homebrew/bin, /usr/local/bin, ~/.local/bin). Install mise and retry."
+  find_fixed_mise
   load_conf
   [ "$1" = "$conf_verb" ] || die "this repository releases with ./dev $conf_verb, not ./dev $1"
   export PATH=/usr/bin:/bin:/usr/sbin:/sbin
   exec_clean "PATH $keep_base $keep_gate $conf_keep_env" "$mise_bin" exec --locked -- "$self" --stage2 "$@"
+}
+
+# The exported GIT_CONFIG_* entries, as sorted NAME=VALUE lines.
+git_config_env() {
+  local v
+  for v in $(compgen -e); do
+    case "$v" in GIT_CONFIG_*) printf '%s=%s\n' "$v" "${!v}" ;; esac
+  done | LC_ALL=C sort
+}
+
+# The GIT_CONFIG_* entries that gh-token.sh exports for git to use the bot token: computed from
+# gh-token.sh itself, the one place that defines them.
+git_auth_entries() {
+  (
+    for v in $(compgen -e); do
+      case "$v" in GIT_CONFIG_*) unset "$v" ;; esac
+    done
+    # shellcheck disable=SC1091 # the core's own token script, beside this file
+    source "$here/gh-token.sh"
+    export_git_auth ""
+    git_config_env
+  )
+}
+
+# Stage 2's git reaches GitHub only through the entries gh-token.sh sets: the names stage 2 keeps
+# (GIT_CONFIG_COUNT, _KEY_n, _VALUE_n) must carry exactly those keys and values, no more, no fewer
+# (finding K10). Another credential helper, URL rewrite or option would otherwise pass by name.
+assert_git_auth() {
+  local current expected
+  expected="$(git_auth_entries)" || die "cannot read the git entries of $here/gh-token.sh"
+  current="$(git_config_env)"
+  [ "$current" = "$expected" ] ||
+    refuse "the GIT_CONFIG_* entries are not exactly the ones gh-token.sh sets: run it as $(basename "$here")/gh-token.sh claude --read-only -- ./dev $conf_verb"
+}
+
+# The mise configuration that stage 2 runs under may add nothing: no variable (an [env] section,
+# its _.file or _.source) and no PATH entry (_.path) other than the tools' own directories. mise
+# reads it from the repository, every parent directory and the global configuration, after the
+# clean re-run, so a variable stage 2 keeps by name (GH_TOKEN, a proxy) could come from there
+# (finding K10).
+assert_no_mise_env() {
+  local added paths bins p
+  find_fixed_mise
+  added="$("$mise_bin" env -D 2>/dev/null)" || refuse "mise cannot print the environment it adds"
+  [ -z "$added" ] ||
+    refuse "the mise configuration sets variables: $(printf '%s\n' "$added" | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' | tr '\n' ' ')(an [env] section; mise config ls names the files)"
+  paths="$("$mise_bin" env --paths 2>/dev/null)" || refuse "mise cannot print the PATH entries it adds"
+  bins="$("$mise_bin" bin-paths 2>/dev/null)" || refuse "mise cannot list its tool directories"
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    printf '%s\n' "$bins" | grep -Fqx -- "$p" ||
+      refuse "the mise configuration adds $p to PATH (an [env] _.path entry; mise config ls names the files)"
+  done <<EOF
+$paths
+EOF
 }
 
 # Stage 2 refuses any variable outside the named list: whatever the first stage dropped and came
@@ -134,9 +206,11 @@ assert_clean_env() {
 
 # 1. Clean tree, and no ignored file that mise or the release would still load.
 gate_clean_tree() {
-  local flagged st ignored f g
-  # assume-unchanged / skip-worktree entries hide local edits from git status.
-  flagged="$(git ls-files -v | grep -E '^([a-z]|S)' || true)"
+  local listing flagged st ignored f g
+  # assume-unchanged / skip-worktree entries hide local edits from git status. git's own failure
+  # is a refusal, not an empty list (Codex C11).
+  listing="$(git ls-files -v)" || refuse "git ls-files -v failed"
+  flagged="$(printf '%s\n' "$listing" | awk '/^([a-z]|S)/ {print; exit}')"
   [ -z "$flagged" ] || refuse "index entry hides local changes (assume-unchanged/skip-worktree): ${flagged%%$'\n'*}"
   st="$(git -c core.fsmonitor=false -c core.untrackedCache=false status --porcelain --untracked-files=all)" ||
     refuse "git status failed"
@@ -158,10 +232,38 @@ EOF
 }
 
 # The gate reads GitHub with the bot token that gh-token.sh puts in GH_TOKEN; no shell keeps a
-# stored GitHub login. Without it, refuse at once rather than let git ask for a password.
+# stored GitHub login. Without it, refuse at once rather than let git ask for a password. The
+# gate only reads, so the token it is meant to get is the read-only one (--read-only).
 need_gh_token() {
   [ -n "${GH_TOKEN:-}" ] ||
-    refuse "no GitHub token: run it as $(basename "$here")/gh-token.sh claude -- ./dev … (the gate only reads GitHub)"
+    refuse "no GitHub token: run it as $(basename "$here")/gh-token.sh claude --read-only -- ./dev … (the gate only reads GitHub)"
+}
+
+# Every network call of the gate (the fetch, each GitHub read) runs under a deadline: one that
+# hangs is killed after gate_deadline seconds, with its child processes (git's remote helper; they
+# would hold the output open), and ends in the caller's refusal, never in a gate that waits
+# forever (Codex C23).
+gate_deadline=60
+with_deadline() {
+  local pid watcher rc=0
+  "$@" &
+  pid=$!
+  (
+    trap 'kill "$s" 2>/dev/null; exit 0' TERM
+    sleep "$gate_deadline" &
+    s=$!
+    wait "$s" && { pkill -TERM -P "$pid" 2>/dev/null; kill -TERM "$pid" 2>/dev/null; }
+  ) </dev/null >/dev/null 2>&1 &
+  watcher=$!
+  wait "$pid" || rc=$?
+  kill -TERM "$watcher" 2>/dev/null || true
+  return "$rc"
+}
+
+# A GitHub read: `gh api` under the deadline, following every page (Codex C10: one page of 100
+# could hide a failed run or a second PR). Arguments: the API path, then the --jq filter.
+gh_read() {
+  with_deadline gh api --paginate "$1" --jq "$2"
 }
 
 # 2. HEAD is the tip of origin/main, and origin/main is main on GitHub.
@@ -169,12 +271,12 @@ gate_tip() {
   local sha tip api_tip
   # Never prompt for a username or password: a token or nothing.
   GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/usr/bin/false SSH_ASKPASS=/usr/bin/false \
-    git -c credential.interactive=false fetch --quiet origin main </dev/null ||
+    with_deadline git -c credential.interactive=false fetch --quiet origin main </dev/null ||
     refuse "cannot fetch origin main"
   sha="$(git rev-parse HEAD)" || refuse "no HEAD"
   tip="$(git rev-parse refs/remotes/origin/main)" || refuse "no origin/main"
   [ "$sha" = "$tip" ] || refuse "HEAD ${sha:0:12} is not the tip of origin/main (${tip:0:12})"
-  api_tip="$(gh api "repos/$conf_repo/commits/main" --jq .sha)" || refuse "cannot read main of $conf_repo from GitHub"
+  api_tip="$(gh_read "repos/$conf_repo/commits/main" .sha)" || refuse "cannot read main of $conf_repo from GitHub"
   [ "$api_tip" = "$sha" ] || refuse "origin/main ${sha:0:12} is not main of $conf_repo on GitHub (${api_tip:0:12})"
   echo "gate: HEAD ${sha:0:12} is the tip of main"
 }
@@ -185,12 +287,12 @@ gate_tip() {
 gate_ci() {
   local sha="$1" runs line r
   if [ "$conf_ci" = check-runs ]; then
-    runs="$(gh api "repos/$conf_repo/commits/$sha/check-runs?per_page=100" \
-      --jq '.check_runs[] | [.name, .app.slug, .status, (.conclusion // "none")] | @tsv')" ||
+    runs="$(gh_read "repos/$conf_repo/commits/$sha/check-runs?per_page=100" \
+      '.check_runs[] | [.name, .app.slug, .status, (.conclusion // "none")] | @tsv')" ||
       refuse "cannot read the check runs of ${sha:0:12}"
   else
-    runs="$(gh api "repos/$conf_repo/actions/runs?head_sha=$sha&event=push&per_page=100" \
-      --jq '.workflow_runs[] | [.path, "", .status, (.conclusion // "none")] | @tsv')" ||
+    runs="$(gh_read "repos/$conf_repo/actions/runs?head_sha=$sha&event=push&per_page=100" \
+      '.workflow_runs[] | [.path, "", .status, (.conclusion // "none")] | @tsv')" ||
       refuse "cannot read the workflow runs of ${sha:0:12}"
   fi
   [ -n "$runs" ] || refuse "no CI run on ${sha:0:12} (not on main, or CI has not started)"
@@ -210,12 +312,12 @@ gate_ci() {
 # 4. The commit is the merge commit of exactly one PR into main, merged by the merger.
 gate_merged_by() {
   local sha="$1" prs by
-  prs="$(gh api "repos/$conf_repo/commits/$sha/pulls" \
-    --jq ".[] | select(.base.ref == \"main\" and .merged_at != null and .merge_commit_sha == \"$sha\") | .number")" ||
+  prs="$(gh_read "repos/$conf_repo/commits/$sha/pulls?per_page=100" \
+    ".[] | select(.base.ref == \"main\" and .merged_at != null and .merge_commit_sha == \"$sha\") | .number")" ||
     refuse "cannot read the PRs of ${sha:0:12}"
   [ -n "$prs" ] || refuse "${sha:0:12} is not the merge commit of a PR into main"
   [[ "$prs" =~ ^[0-9]+$ ]] || refuse "${sha:0:12} is the merge commit of several PRs: ${prs//$'\n'/ }"
-  by="$(gh api "repos/$conf_repo/pulls/$prs" --jq '.merged_by.login // ""')" || refuse "cannot read PR #$prs"
+  by="$(gh_read "repos/$conf_repo/pulls/$prs" '.merged_by.login // ""')" || refuse "cannot read PR #$prs"
   [ "$by" = "$conf_merger" ] || refuse "PR #$prs was merged by '${by:-unknown}', not by '$conf_merger'"
   echo "gate: PR #$prs merged by $conf_merger"
 }
@@ -230,29 +332,86 @@ gate_all() {
 }
 
 # --- The record of the last release: <git common dir>/dev-<verb>/, never committed ------------
-# `last` holds one SHA, `log` one line per release attempt. The release command may keep its own
-# state in the same directory (GATE_RECORD_DIR).
+# `last` holds one SHA (the baseline every later release is checked from), `log` one line per
+# release attempt, `lock` exists while a release or a baseline change runs. The release command
+# may keep its own state in the same directory (GATE_RECORD_DIR). PA chose to keep the baseline
+# in the clone (session 24c): a missing or unusable one is refused, and only PA's explicit
+# `./dev gate --baseline <sha>` on the terminal sets it again ('Baseline' in docs/harness-core.md).
 
 record_dir="" last_released=""
+BASELINE_HINT="if you know the last commit released to the target, record it in your terminal with ./dev gate --baseline <sha>"
+
+set_record_dir() {
+  record_dir="$(cd "$(git rev-parse --git-common-dir)" && pwd)/dev-$conf_verb" || die "no git directory"
+}
 
 read_last() {
-  record_dir="$(cd "$(git rev-parse --git-common-dir)" && pwd)/dev-$conf_verb" || die "no git directory"
+  set_record_dir
   last_released=""
   if [ -f "$record_dir/last" ]; then
     last_released="$(head -1 "$record_dir/last")"
-    [[ "$last_released" =~ ^[0-9a-f]{40}$ ]] || die "bad record in $record_dir/last"
+    [[ "$last_released" =~ ^[0-9a-f]{40}$ ]] || die "bad record in $record_dir/last ($BASELINE_HINT)"
   fi
 }
 
-# 5. No going back: when this clone has the last released commit, HEAD must descend from it.
-gate_descends() {
-  local sha="$1"
-  read_last
-  if [ -n "$last_released" ] && git cat-file -e "$last_released^{commit}" 2>/dev/null; then
-    git merge-base --is-ancestor "$last_released" "$sha" ||
-      refuse "HEAD ${sha:0:12} does not descend from the last released commit ${last_released:0:12}"
-    echo "gate: HEAD descends from the last released commit (${last_released:0:12})"
+# One release or baseline change at a time per clone. `lock` is a symbolic link whose target is
+# the owner's PID: `ln -s` creates it and publishes the owner in one atomic step, so there is no
+# moment when a live lock has no owner to check (Codex review of #102). A lock whose process is
+# gone is taken over; one that is not a PID link is refused, never removed. Each run removes only
+# its own lock, on any exit.
+lock_held=""
+release_lock() {
+  if [ -n "$lock_held" ] && [ "$(readlink "$record_dir/lock" 2>/dev/null || true)" = "$$" ]; then
+    rm -f "$record_dir/lock"
   fi
+  lock_held=""
+}
+take_lock() {
+  local pid
+  set_record_dir
+  mkdir -p "$record_dir"
+  # ln -s into an existing directory would create the link inside it and succeed; the gate
+  # never makes a directory there, so one is foreign.
+  if [ -d "$record_dir/lock" ] && [ ! -L "$record_dir/lock" ]; then
+    refuse "$record_dir/lock is not a lock of this gate; if no release is running, remove it: rm -rf '$record_dir/lock'"
+  fi
+  if ! ln -s "$$" "$record_dir/lock" 2>/dev/null; then
+    pid="$(readlink "$record_dir/lock" 2>/dev/null || true)"
+    [[ "$pid" =~ ^[0-9]+$ ]] ||
+      refuse "$record_dir/lock is not a lock of this gate; if no release is running, remove it: rm -rf '$record_dir/lock'"
+    if kill -0 "$pid" 2>/dev/null; then
+      refuse "another release of this clone is running (pid $pid); wait for it to end"
+    fi
+    echo "gate: taking over a lock left by a process that is gone (pid $pid)"
+    # Remove it only if it is still that stale lock, then claim it the same atomic way.
+    if [ "$(readlink "$record_dir/lock" 2>/dev/null || true)" = "$pid" ]; then rm -f "$record_dir/lock"; fi
+    ln -s "$$" "$record_dir/lock" 2>/dev/null || refuse "another release of this clone started at the same moment"
+  fi
+  lock_held=1
+  trap release_lock EXIT
+}
+
+# 5. Every change since the last release came through a PR merged by the merger (finding K21).
+# HEAD descends from the last released commit, and each first-parent commit after it (each step
+# by which main moved; squash merging makes it one commit per PR) is the merge commit of exactly
+# one PR into main, merged by the merger. So a direct push to main is refused even when a later,
+# unrelated merge by the merger put it in HEAD's history. Without a usable last release there is
+# nothing to count from, and the gate refuses ('Baseline' in docs/harness-core.md).
+gate_since_last() {
+  local sha="$1" commits c n=0
+  read_last
+  [ -n "$last_released" ] || refuse "no last release on record in $record_dir/last: $BASELINE_HINT"
+  git cat-file -e "$last_released^{commit}" 2>/dev/null ||
+    refuse "the last released commit ${last_released:0:12} is not in this clone (fetch it, or $BASELINE_HINT)"
+  git merge-base --is-ancestor "$last_released" "$sha" ||
+    refuse "HEAD ${sha:0:12} does not descend from the last released commit ${last_released:0:12}"
+  commits="$(git rev-list --first-parent "$last_released..$sha")" || refuse "cannot list the commits since ${last_released:0:12}"
+  for c in $commits; do
+    n=$((n + 1))
+    # The tip itself was checked with CI (gate_all).
+    [ "$c" = "$sha" ] || gate_merged_by "$c"
+  done
+  echo "gate: $n change(s) to main since the last release (${last_released:0:12}), each a PR merged by $conf_merger"
 }
 
 # PA confirms on the terminal only (/dev/tty), never on stdin. A convenience, not a boundary: a
@@ -268,37 +427,97 @@ confirm() {
   [ "$answer" = "yes" ] || die "stopped: not confirmed"
 }
 
-# 6. The guarded files (CI, the core, the release command, agent permissions and hooks): their
-# diff since the last release, confirmed by PA. Nothing to confirm when nothing changed, so an
-# unchanged gate needs no terminal. With no usable record, their recent history.
+# Paths that decide what the gate and the release do, guarded whatever harness.toml says (finding
+# K6): the entry point, what the clean-tree check sees (.gitignore), the settings, the core, the
+# pins, CI, hooks and agent permissions. gate_guarded_diff adds the core's own directory and the
+# release command, both the last release's and the candidate's.
+fixed_guarded='dev .gitignore harness.toml .harness mise.toml mise.lock .github .githooks .claude .codex .agents'
+# Every key of the [gate] table: a change of any of them since the last release is shown as such.
+gate_keys='repo merger verb release ci checks_app required guarded loaded keep_env'
+
+# The [gate] settings of harness.toml at the last release, read by this conf.awk into old_<key>.
+# old_settings: ok; none (no harness.toml or no [gate] table then: a first release under the core);
+# unreadable (it does not parse).
+old_settings=""
+read_old_settings() {
+  local parsed kind k v
+  for k in $gate_keys; do printf -v "old_$k" '%s' ""; done
+  old_settings=none
+  git cat-file -e "$last_released:harness.toml" 2>/dev/null || return 0
+  parsed="$(git show "$last_released:harness.toml" | awk -f "$here/conf.awk" 2>/dev/null)" || {
+    old_settings=unreadable
+    return 0
+  }
+  while IFS="$(printf '\t')" read -r kind k v; do
+    case "$kind $k" in
+      "gate "*) printf -v "old_$k" '%s' "$v" && old_settings=ok ;;
+    esac
+  done <<EOF
+$parsed
+EOF
+}
+
+# 6. What decides the gate and the release, since the last release, confirmed by PA: the diff of
+# the guarded paths (the fixed set, the core, both release commands, and the union of the last
+# release's and the candidate's `guarded`, so a candidate cannot hide a path by dropping it), and
+# each [gate] setting that changed. Nothing to confirm when nothing changed, so an unchanged gate
+# needs no terminal.
 gate_guarded_diff() {
-  local sha="$1" paths
-  read -r -a paths <<<"$conf_guarded"
+  local sha="$1" k cur old changed="" diff_quiet=1 list
+  local -a paths
   read_last
-  if [ -n "$last_released" ] && git cat-file -e "$last_released^{commit}" 2>/dev/null; then
-    if git diff --quiet "$last_released" "$sha" -- "${paths[@]}"; then
-      echo "gate: guarded files unchanged since the last release (${last_released:0:12})"
-      return 0
-    fi
-    need_tty
+  [ -n "$last_released" ] || refuse "no last release on record in $record_dir/last"
+  read_old_settings
+  list="$fixed_guarded $(basename "$here") $conf_release $conf_guarded"
+  [ "$old_settings" != ok ] || list="$list $old_release $old_guarded"
+  # Split on blanks into words (empty ones dropped); read does not expand globs.
+  read -r -a paths <<<"$list"
+  for k in $gate_keys; do
+    cur="conf_$k" old="old_$k"
+    [ "$old_settings" != ok ] || [ "${!cur}" = "${!old}" ] || changed="$changed  $k: '${!old}' -> '${!cur}'"$'\n'
+  done
+  git diff --quiet "$last_released" "$sha" -- "${paths[@]}" || diff_quiet=""
+  if [ -n "$diff_quiet" ] && [ -z "$changed" ] && [ "$old_settings" = ok ]; then
+    echo "gate: guarded files and gate settings unchanged since the last release (${last_released:0:12})"
+    return 0
+  fi
+  need_tty
+  if [ "$old_settings" != ok ]; then
+    echo "== The last release's harness.toml has no readable [gate] table ($old_settings): every gate setting is new."
+  elif [ -n "$changed" ]; then
+    echo "== Gate settings changed since the last release (${last_released:0:12} -> ${sha:0:12}):"
+    printf '%s' "$changed"
+  fi
+  if [ -z "$diff_quiet" ]; then
     echo "== Guarded files changed since the last release (${last_released:0:12} -> ${sha:0:12}):"
     git --no-pager diff --stat "$last_released" "$sha" -- "${paths[@]}"
     git --no-pager diff "$last_released" "$sha" -- "${paths[@]}"
-  else
-    need_tty
-    [ -z "$last_released" ] || echo "== The recorded last release ${last_released:0:12} is not in this clone."
-    echo "== No previous release on record. Recent changes to the guarded files at ${sha:0:12}:"
-    git --no-pager log --oneline -10 "$sha" -- "${paths[@]}"
   fi
-  confirm "Confirm the guarded files above (type yes): "
+  confirm "Confirm the changes above (type yes): "
 }
 
 # --- The release ------------------------------------------------------------------------------
 
+# The bot token (GH_TOKEN, and the GIT_CONFIG_* entries through which git uses it) is for the
+# gate's GitHub reads only: nothing of the repository runs with it.
+drop_github_auth() {
+  local v
+  unset GH_TOKEN GIT_CONFIG_COUNT
+  for v in $(compgen -e); do case "$v" in GIT_CONFIG_KEY_* | GIT_CONFIG_VALUE_*) unset "$v" ;; esac; done
+}
+
+# Appends to `log`; with result ok (a release) or baseline (PA's recovery), replaces `last`, but
+# only if it still holds what this run read at its start (written whole, then renamed).
 record() { # sha result
+  local now
   mkdir -p "$record_dir"
-  [ "$2" != ok ] || printf '%s\n' "$1" >"$record_dir/last"
   printf '%s %s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$1" "$2" >>"$record_dir/log"
+  case "$2" in ok | baseline) ;; *) return 0 ;; esac
+  now="$(head -1 "$record_dir/last" 2>/dev/null || true)"
+  [ "$now" = "$last_released" ] ||
+    die "$record_dir/last changed during this run (${now:0:12}); ${1:0:12} was not recorded: check the target, then $BASELINE_HINT"
+  { printf '%s\n' "$1" >"$record_dir/last.new" && mv -f "$record_dir/last.new" "$record_dir/last"; } ||
+    die "cannot write $record_dir/last; ${1:0:12} was not recorded"
 }
 
 # Runs the repository's release command with the commit and the verb's arguments. It gets
@@ -306,10 +525,9 @@ record() { # sha result
 # validates its own arguments before reading any credential. Exit 0: released, recorded; exit
 # NOTHING_RELEASED: nothing released, nothing recorded; anything else: failed, logged only.
 run_release() {
-  local sha="$1" rc=0 v
+  local sha="$1" rc=0
   shift
-  unset GH_TOKEN GIT_CONFIG_COUNT
-  for v in $(compgen -e); do case "$v" in GIT_CONFIG_KEY_* | GIT_CONFIG_VALUE_*) unset "$v" ;; esac; done
+  drop_github_auth
   echo "== $conf_release ${sha:0:12} $*"
   GATE_SHA="$sha" GATE_LAST="$last_released" GATE_RECORD_DIR="$record_dir" "$root/$conf_release" "$@" || rc=$?
   case "$rc" in
@@ -325,27 +543,35 @@ run_release() {
   esac
 }
 
+# The order is the point (finding K20): every check that needs no repository code runs first,
+# and the GitHub credential is dropped before anything of the repository runs (its `./dev check`
+# command, then the release command).
 release_stage2() {
   load_conf
   assert_clean_env
   [ "$1" = "$conf_verb" ] || die "this repository releases with ./dev $conf_verb, not ./dev $1"
   shift
+  assert_no_mise_env
   need_gh_token
-  "$here/dev" check
+  assert_git_auth
+  take_lock
   gate_all
-  gate_descends "$gate_sha"
+  gate_since_last "$gate_sha"
   gate_guarded_diff "$gate_sha"
+  drop_github_auth
+  "$here/dev" check </dev/null || die "./dev check failed on ${gate_sha:0:12}; nothing was released"
   run_release "$gate_sha" "$@"
 }
 
-# Read-only. No argument: the checks on HEAD and the descent. With a commit: CI and merged-by.
+# Read-only. No argument: the checks on HEAD and every change since the last release. With a
+# commit: CI and merged-by for that commit.
 check_main() {
   local sha
   load_conf
   need_gh_token
   if [ "$#" -eq 0 ]; then
     gate_all
-    gate_descends "$gate_sha"
+    gate_since_last "$gate_sha"
   else
     [ "$#" -eq 1 ] || die "usage: ./dev gate [<sha>]"
     sha="$(git rev-parse --verify --quiet "$1^{commit}")" || die "unknown commit: $1"
@@ -355,14 +581,52 @@ check_main() {
   echo "gate: OK"
 }
 
+# PA's recovery of a missing or unusable baseline (`./dev gate --baseline <sha>`): the commit must
+# be in this clone and on origin/main; PA sees it and the record it replaces, and types yes on
+# the terminal. Nothing else ever sets `last` except a release. No GitHub token is needed.
+set_baseline() {
+  local sha
+  load_conf
+  sha="$(git rev-parse --verify --quiet "$1^{commit}")" || die "unknown commit: $1 (fetch it first)"
+  git merge-base --is-ancestor "$sha" refs/remotes/origin/main 2>/dev/null ||
+    refuse "${sha:0:12} is not on origin/main: only a commit of main can have been released"
+  need_tty
+  take_lock
+  # The record is read as it is, unvalidated: this is the way out of a malformed one (Codex
+  # review of #102). record() then replaces it only if it is still these exact bytes.
+  set_record_dir
+  last_released="$(head -1 "$record_dir/last" 2>/dev/null || true)"
+  echo "== Baseline of ./dev $conf_verb in $record_dir/last"
+  if [ -z "$last_released" ]; then
+    echo "   now:  none"
+  elif [[ "$last_released" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "   now:  $last_released"
+  else
+    echo "   now:  malformed ($(printf '%s' "$last_released" | head -c 60 | LC_ALL=C tr -c '[:alnum:]' '?'))"
+  fi
+  echo "   new:  $sha"
+  git --no-pager log -1 --format='   %h %ad %s' --date=short "$sha"
+  echo "   Every later release must descend from it, and each change to main after it must be a PR merged by $conf_merger."
+  confirm "Record it as the last commit released to the target (type yes): "
+  record "$sha" baseline
+  echo "gate: baseline recorded: ${sha:0:12}"
+}
+
 main() {
   cd "$root"
   case "${1:-}" in
-    check) shift && check_main "$@" ;;
+    check)
+      if [ "${2:-}" = --baseline ]; then
+        [ "$#" -eq 3 ] || die "usage: ./dev gate --baseline <sha>"
+        set_baseline "$3"
+      else
+        shift && check_main "$@"
+      fi
+      ;;
     tree) [ "$#" -eq 1 ] || die "usage: harness/gate tree" && load_conf && gate_clean_tree ;;
     release) [ "$#" -ge 2 ] || die "usage: ./dev apply|deploy [args…]" && shift && release_stage1 "$@" ;;
     --stage2) [ "$#" -ge 2 ] || die "usage: ./dev apply|deploy [args…]" && shift && release_stage2 "$@" ;;
-    *) die "usage: ./dev gate [<sha>] | ./dev apply|deploy [args…] | harness/gate tree" ;;
+    *) die "usage: ./dev gate [<sha>] | ./dev gate --baseline <sha> | ./dev apply|deploy [args…] | harness/gate tree" ;;
   esac
 }
 

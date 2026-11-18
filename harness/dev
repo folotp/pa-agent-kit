@@ -39,10 +39,19 @@ find_mise() {
 mise_bin="$(find_mise)" ||
   die "mise not found (PATH, /opt/homebrew/bin, /usr/local/bin, ~/.local/bin). Install mise, then run ./dev setup. A cloud session ships without mise and installs nothing by itself: see docs/harness-core.md, 'Cloud sessions'."
 
-# `setup` is the only verb that installs anything (auto_install is off in mise.toml).
+# The core's git hooks (pre-commit, pre-push), relative to the work tree so that every worktree
+# uses its own checkout's copy: harness/githooks in the workshop, .harness/githooks in a consumer.
+hooks_path="$(basename "$(dirname "$self")")/githooks"
+
+# `setup` is the only verb that installs anything (auto_install is off in mise.toml): the locked
+# tools, and the git hooks (core.hooksPath, written only when it differs: the agent sandbox cannot
+# write .git/config, so PA runs setup in a terminal).
 if [ "${1:-}" = "setup" ]; then
   [ "$#" -eq 1 ] || die "usage: ./dev setup"
   "$mise_bin" install --locked
+  if [ "$(git config --get core.hooksPath || true)" != "$hooks_path" ]; then
+    git config core.hooksPath "$hooks_path" || die "cannot set core.hooksPath to $hooks_path (run ./dev setup in your own terminal)"
+  fi
   exec "$self" check
 fi
 
@@ -112,28 +121,58 @@ EOF
 }
 
 # A repository that syncs the core holds it in .harness/ with a CHECKSUMS file (written by
-# `./dev sync`). Any changed, missing or extra file there is drift. This detects an accident or a
-# hand edit; it is not protection, since an agent could change the file and its checksum together.
+# `./dev sync`): one line per file, `<mode> <sha256> <path>`, mode 644 or 755. A changed, missing
+# or extra file, a symbolic link, or an executable bit that differs from the recorded mode is
+# drift. This detects an accident or a hand edit; it is not protection, since an agent could
+# change the file and its checksum together.
 verify_core() {
   [ -d .harness ] || return 0
   [ -f .harness/CHECKSUMS ] || die ".harness/CHECKSUMS is missing: re-sync the core (./dev sync in the workshop)"
-  local sum listed present
+  local sum mode hash path f bad="" listed present
   if command -v sha256sum >/dev/null 2>&1; then sum="sha256sum"; else sum="shasum -a 256"; fi
-  (cd .harness && $sum -c --quiet CHECKSUMS >/dev/null 2>&1) ||
-    die ".harness differs from its CHECKSUMS (changed or missing file: $(cd .harness && $sum -c CHECKSUMS 2>/dev/null | grep -v ': OK$' | tr '\n' ' '))"
-  listed="$(awk '{print $2}' .harness/CHECKSUMS | LC_ALL=C sort)"
-  present="$(cd .harness && find . -type f ! -name CHECKSUMS | sed 's|^\./||' | LC_ALL=C sort)"
+  while read -r mode hash path; do
+    [[ "$mode" =~ ^(644|755)$ && "$hash" =~ ^[0-9a-f]{64}$ && "$path" =~ ^[A-Za-z0-9._/-]+$ ]] ||
+      die ".harness/CHECKSUMS has a malformed line (mode sha256 path expected): re-sync the core"
+    f=".harness/$path"
+    if [ ! -f "$f" ] || [ -L "$f" ]; then
+      bad="$bad $path (missing)"
+      continue
+    fi
+    [ "$($sum "$f" | awk '{print $1}')" = "$hash" ] || bad="$bad $path (content)"
+    if [ "$mode" = 755 ]; then [ -x "$f" ] || bad="$bad $path (mode)"; else [ ! -x "$f" ] || bad="$bad $path (mode)"; fi
+  done <.harness/CHECKSUMS
+  [ -z "$bad" ] || die ".harness differs from its CHECKSUMS:$bad; re-sync the core"
+  listed="$(awk '{print $3}' .harness/CHECKSUMS | LC_ALL=C sort)"
+  present="$(cd .harness && find . ! -type d ! -name CHECKSUMS | sed 's|^\./||' | LC_ALL=C sort)"
   [ "$listed" = "$present" ] || die ".harness has files that CHECKSUMS does not list (or lacks listed ones): re-sync the core"
 }
 
+# The active git hooks must be the core's (finding K14): a clone that never ran `./dev setup`, or
+# whose hooks point elsewhere (an old checkout of another repository), is refused with the fix.
+verify_hooks() {
+  local active
+  active="$(git config --get core.hooksPath || true)"
+  [ "$active" = "$hooks_path" ] ||
+    die "git hooks are not the core's (core.hooksPath is '${active:-unset}', not '$hooks_path'): run ./dev setup in your own terminal"
+}
+
 # Printed by check and at the start of ci, so that every log carries the resolved versions.
+# Each tool's version is the one mise resolved it to (`mise which --version`, report 2.4); no tool
+# is run to ask it.
 print_tools() {
-  local t
+  local t version
   printf '%-12s %s\n' profile "$profile"
   printf '%-12s %s %s\n' mise "$("$mise_bin" --version | head -1)" "$mise_bin"
   for t in $tools; do
-    printf '%-12s %s\n' "$t" "$(command -v "$t")"
+    version="$("$mise_bin" which "$t" --version 2>/dev/null)" || die "mise cannot tell the version of $t (run ./dev setup)"
+    printf '%-12s %-10s %s\n' "$t" "$version" "$(command -v "$t")"
   done
+}
+
+# A check command runs in its own bash with pipefail, so a failure early in a pipeline is not
+# hidden by a successful last command (Codex C11).
+run_check() {
+  bash -o pipefail -c "$1" </dev/null
 }
 
 cmd="${1:-}"
@@ -142,10 +181,12 @@ case "$cmd" in
     [ "$#" -eq 1 ] || die "usage: ./dev check"
     verify_tools
     verify_core
+    verify_hooks
     print_tools
+    printf '%-12s %s\n' hooks "$hooks_path"
     # The repository's own offline check (harness.toml `check`): it must contact nothing.
     if [ -n "$check_command" ]; then
-      bash -c "$check_command" </dev/null || die "check failed: $check_command"
+      run_check "$check_command" || die "check failed: $check_command"
     fi
     ;;
   ci)
@@ -155,13 +196,13 @@ case "$cmd" in
     print_tools
     if [ -n "$check_command" ]; then
       echo "== check"
-      bash -c "$check_command" </dev/null || die "check failed: $check_command"
+      run_check "$check_command" || die "check failed: $check_command"
     fi
     [ -n "$checks" ] || die "harness.toml: no checks"
     while IFS="$(printf '\t')" read -r name command_line; do
       [ -n "$name" ] || continue
       echo "== $name"
-      bash -c "$command_line" </dev/null || die "check failed: $name"
+      run_check "$command_line" || die "check failed: $name"
     done <<EOF
 $checks
 EOF
