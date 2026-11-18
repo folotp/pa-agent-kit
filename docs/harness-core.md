@@ -15,20 +15,25 @@ Status: the dispatcher and CI skeleton (session 19); the gate wrapper, the guard
 
 ## Inventory of the imported harness
 
-`harness/` was imported from the toolkit's single-root layout without edits (session 16). Most of it is the toolkit's own Python development harness, which is not part of the core. Line counts were measured on 2026-11-17.
+`harness/` was imported from the toolkit's single-root layout without edits (session 16). Most of it was the toolkit's own Python development harness, which is not part of the core. Total imported: 5,662 lines (measured 2026-11-17). Since session 23b, `harness/` holds the core only: every tracked file under it is named by `harness/core.files`.
 
-| Path | Lines | Decision |
-|---|---|---|
-| `harness/scripts/dev` | 33 | Replaced by the new `harness/dev` dispatcher. The old launcher is not wired to anything. |
-| `harness/scripts/dev.py`, `verify-agent.py`, `verify-agent-concurrency.py` | 2,049 | Toolkit-specific gates and agent probes. Not core. Left untouched and unwired; their fate is a question for PA (see "Open questions"). |
-| `harness/tests/` (five files) | 1,902 | Tests of the files above. Same fate. |
-| `harness/config/development.json`, `specifications.json` | 164 | Toolkit gate table and the spec list. `specifications.json` is input to session 22 (`specs.lock`). |
-| `harness/config/toolchain.json` | 38 | **Removed in this session.** It was a minimum-version check; mise pins replace it. |
-| `harness/docs/` (six pages), `harness/.github/` | 934 | Describe the toolkit harness. Session 23 (harness review) decides. |
-| `harness/.claude/settings.json`, `harness/.codex/hooks.json` | 100 | The toolkit harness's own hook wiring (`scripts/dev hook …`), loaded by nothing here. Not the core's bindings, which are new in `harness/bindings/` (session 20). They go with the toolkit's Python harness (see "Open questions"). |
-| `harness/pyproject.toml`, `uv.lock`, `.python-version`, `.gitignore` | 437 | Python environment of the toolkit harness. Not core. |
+| Path | Lines | What it did | What happened |
+|---|---|---|---|
+| `harness/config/toolchain.json` | 38 | Minimum tool versions. | Removed in session 19: mise pins replace it. |
+| `harness/config/specifications.json` | 19 | The upstream spec list. | Removed in session 22: `tools/specs/watch.json` and `specs.lock` replace it. |
+| `harness/scripts/dev`, `dev.py` | 925 | The toolkit's dispatcher: `check`, `ci`, `plan`, `specs`, `package`, `release-check`, `hook`, `worktree`, `install-hooks`, `format` and more. | Deleted in session 23b. Replaced by `harness/dev`, the path filters ('Path filters'), `specs.lock`, `scripts/plugin_zip.py` with `release.yml`, and the guard. |
+| `harness/scripts/verify-agent.py`, `verify-agent-concurrency.py` | 1,153 | Real-client acceptance probes (the per-agent acceptance matrix). | Deleted in session 23b. Dropped on purpose (report 2.7); the workaround probes in `tools/probes/` cover what the register needs. |
+| `harness/tests/` (five files, 91 tests) | 1,902 | Tests of the scripts above. They did not run from `harness/`: 49 errors and 9 failures. | Deleted in session 23b with the scripts. |
+| `harness/config/development.json` | 137 | The toolkit's gate and impact table, read by `dev.py`. | Deleted in session 23b. |
+| `harness/docs/` (six pages) | 850 | Development setup, architecture, hook scope, supported agents, acceptance plan and evidence. | Deleted in session 23b. This page describes the core. |
+| `harness/.github/` | 84 | `release-checks.yml` and Copilot instructions; GitHub never ran them at this path. | Deleted in session 23b. |
+| `harness/.claude/settings.json`, `harness/.codex/hooks.json` | 100 | Hook wiring to `scripts/dev hook …`, loaded by nothing here. | Deleted in session 23b. The core's bindings are in `harness/bindings/`. |
+| `harness/pyproject.toml`, `uv.lock`, `.python-version`, `.gitignore` | 437 | The uv environment of the scripts above. | Deleted in session 23b. |
+| `tools/pa-devtools/` (13 files) | 1,292 | The toolkit's Python SDK (`planning`, `specifications`, `hooks`, `snapshots`, `source`); its only consumer was `harness/scripts/dev.py`. | Deleted in session 23b. |
 
-Total imported: 5,662 lines. The core after this session is the new files only (see "Line count" in the tracker); the target for the whole core is about 600 lines.
+Nothing referenced the deleted files outside themselves and this page: no workflow, no `harness.toml` entry, no root test, no plugin manifest. Every deleted file can be read at commit `60c18cd` (for example `git show 60c18cd:harness/scripts/dev.py`), and in the archived `pa-toolkit` repository.
+
+Still open, outside this page: the `pa-toolkit` plugin's `config/release.json`, `AGENTS.md`, `README.md` and `skills/plugin-release/references/development.md` still name `./scripts/dev` and `release-checks.yml`. These have not existed relative to the plugin since session 16. Fixing them is a plugin change with its own version bump, left to a later session.
 
 ## What the core does
 
@@ -77,7 +82,7 @@ specs = "python3 -B tools/specs/specs.py"
 
 ## Open questions
 
-- **The toolkit's Python harness** (`harness/scripts/dev.py`, `verify-agent*.py`, `harness/tests/`, `harness/config/development.json`, the six docs): about 4,900 lines that are not part of the core. This session leaves them in place, unwired. Delete them, move them under `plugins/pa-toolkit/`, or keep them as toolkit tooling? Decided by PA, most likely in session 23.
+None. The toolkit's Python harness was the last one: PA chose to delete it (session 23b, see "Inventory of the imported harness").
 
 ## Cloud sessions
 
@@ -278,7 +283,7 @@ Report 2.7. This repository follows upstream specifications (Agent Skills, Agent
 
 ## Sync
 
-`./dev sync <rev> <consumer-checkout> [--pr]` runs in the workshop (a verb of this repository's `harness.toml`, `tools/sync/sync.py`, not part of the core). `<rev>` is a core tag (`harness-vX.Y`) or any commit-ish; the core is read from git at that revision, never from the working tree. `harness/core.files` lists what is core (the toolkit Python under `harness/` is not listed, so it never reaches a consumer).
+`./dev sync <rev> <consumer-checkout> [--pr]` runs in the workshop (a verb of this repository's `harness.toml`, `tools/sync/sync.py`, not part of the core). `<rev>` is a core tag (`harness-vX.Y`) or any commit-ish; the core is read from git at that revision, never from the working tree. `harness/core.files` lists what is core; since session 23b it names every tracked file under `harness/`, and nothing else reaches a consumer.
 
 In the consumer, on a new branch `harness-sync/<rev>` and in one commit:
 

@@ -1,6 +1,6 @@
 # Paths of the core, relative to harness/. `./dev sync` copies exactly these (at the chosen revision) into a
 # consumer's .harness/. A name ending in / means every tracked file below it. Nothing else under harness/
-# is core: the imported toolkit Python is not listed, so it never reaches a consumer.
+# is core: a file added there reaches a consumer only once it is listed here.
 dev
 conf.awk
 gate
