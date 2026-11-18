@@ -70,13 +70,19 @@ EOF
   [[ "$conf_verb" =~ ^(apply|deploy)$ ]] || die "harness.toml [gate]: verb is apply or deploy, not '$conf_verb'"
   [[ "$conf_release" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "$conf_release" != *..* ]] && [ -x "$root/$conf_release" ] ||
     die "harness.toml [gate]: release '$conf_release' is not an executable file of the repository"
+  # Tracked, as a regular executable file (mode 100755), and not a symbolic link: what runs is
+  # what the clean-tree check and the guarded diff cover (Codex C12).
+  [ -f "$root/$conf_release" ] && [ ! -L "$root/$conf_release" ] &&
+    [ "$(git -C "$root" ls-files -s -- "$conf_release" | awk '{print $1}')" = 100755 ] ||
+    die "harness.toml [gate]: release '$conf_release' is not a tracked regular executable file (git mode 100755)"
   case "$conf_ci" in
     check-runs) [[ "$conf_checks_app" =~ ^[A-Za-z0-9-]+$ ]] || die "harness.toml [gate]: check-runs needs checks_app" ;;
     workflow-runs) [ -z "$conf_checks_app" ] || die "harness.toml [gate]: checks_app is for check-runs only" ;;
     *) die "harness.toml [gate]: ci is check-runs or workflow-runs, not '$conf_ci'" ;;
   esac
-  [[ "$conf_required" =~ ^[A-Za-z0-9._/\ -]+$ ]] || die "harness.toml [gate]: required lists at least one check"
-  [[ "$conf_guarded" =~ ^[A-Za-z0-9._/\ -]+$ ]] || die "harness.toml [gate]: guarded lists at least one path"
+  [[ "$conf_required" =~ ^[A-Za-z0-9._/\ -]+$ && "$conf_required" =~ [^\ ] ]] || die "harness.toml [gate]: required lists at least one check"
+  # Optional since the fixed set (fixed_guarded) is always guarded: only the repository's extras.
+  [[ "$conf_guarded" =~ ^[A-Za-z0-9._/\ -]*$ ]] || die "harness.toml [gate]: bad guarded '$conf_guarded'"
   [[ "$conf_loaded" =~ ^[A-Za-z0-9._/*?\ -]*$ ]] || die "harness.toml [gate]: bad loaded '$conf_loaded'"
   [[ "$conf_keep_env" =~ ^([A-Z_][A-Z0-9_]*\ ?)*$ ]] || die "harness.toml [gate]: bad keep_env '$conf_keep_env'"
   case " $conf_tools " in *" gh "*) ;; *) die "harness.toml: tools must include gh (the gate reads GitHub with it)" ;; esac
@@ -200,9 +206,11 @@ assert_clean_env() {
 
 # 1. Clean tree, and no ignored file that mise or the release would still load.
 gate_clean_tree() {
-  local flagged st ignored f g
-  # assume-unchanged / skip-worktree entries hide local edits from git status.
-  flagged="$(git ls-files -v | grep -E '^([a-z]|S)' || true)"
+  local listing flagged st ignored f g
+  # assume-unchanged / skip-worktree entries hide local edits from git status. git's own failure
+  # is a refusal, not an empty list (Codex C11).
+  listing="$(git ls-files -v)" || refuse "git ls-files -v failed"
+  flagged="$(printf '%s\n' "$listing" | awk '/^([a-z]|S)/ {print; exit}')"
   [ -z "$flagged" ] || refuse "index entry hides local changes (assume-unchanged/skip-worktree): ${flagged%%$'\n'*}"
   st="$(git -c core.fsmonitor=false -c core.untrackedCache=false status --porcelain --untracked-files=all)" ||
     refuse "git status failed"
@@ -231,17 +239,44 @@ need_gh_token() {
     refuse "no GitHub token: run it as $(basename "$here")/gh-token.sh claude --read-only -- ./dev … (the gate only reads GitHub)"
 }
 
+# Every network call of the gate (the fetch, each GitHub read) runs under a deadline: one that
+# hangs is killed after gate_deadline seconds, with its child processes (git's remote helper; they
+# would hold the output open), and ends in the caller's refusal, never in a gate that waits
+# forever (Codex C23).
+gate_deadline=60
+with_deadline() {
+  local pid watcher rc=0
+  "$@" &
+  pid=$!
+  (
+    trap 'kill "$s" 2>/dev/null; exit 0' TERM
+    sleep "$gate_deadline" &
+    s=$!
+    wait "$s" && { pkill -TERM -P "$pid" 2>/dev/null; kill -TERM "$pid" 2>/dev/null; }
+  ) </dev/null >/dev/null 2>&1 &
+  watcher=$!
+  wait "$pid" || rc=$?
+  kill -TERM "$watcher" 2>/dev/null || true
+  return "$rc"
+}
+
+# A GitHub read: `gh api` under the deadline, following every page (Codex C10: one page of 100
+# could hide a failed run or a second PR). Arguments: the API path, then the --jq filter.
+gh_read() {
+  with_deadline gh api --paginate "$1" --jq "$2"
+}
+
 # 2. HEAD is the tip of origin/main, and origin/main is main on GitHub.
 gate_tip() {
   local sha tip api_tip
   # Never prompt for a username or password: a token or nothing.
   GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/usr/bin/false SSH_ASKPASS=/usr/bin/false \
-    git -c credential.interactive=false fetch --quiet origin main </dev/null ||
+    with_deadline git -c credential.interactive=false fetch --quiet origin main </dev/null ||
     refuse "cannot fetch origin main"
   sha="$(git rev-parse HEAD)" || refuse "no HEAD"
   tip="$(git rev-parse refs/remotes/origin/main)" || refuse "no origin/main"
   [ "$sha" = "$tip" ] || refuse "HEAD ${sha:0:12} is not the tip of origin/main (${tip:0:12})"
-  api_tip="$(gh api "repos/$conf_repo/commits/main" --jq .sha)" || refuse "cannot read main of $conf_repo from GitHub"
+  api_tip="$(gh_read "repos/$conf_repo/commits/main" .sha)" || refuse "cannot read main of $conf_repo from GitHub"
   [ "$api_tip" = "$sha" ] || refuse "origin/main ${sha:0:12} is not main of $conf_repo on GitHub (${api_tip:0:12})"
   echo "gate: HEAD ${sha:0:12} is the tip of main"
 }
@@ -252,12 +287,12 @@ gate_tip() {
 gate_ci() {
   local sha="$1" runs line r
   if [ "$conf_ci" = check-runs ]; then
-    runs="$(gh api "repos/$conf_repo/commits/$sha/check-runs?per_page=100" \
-      --jq '.check_runs[] | [.name, .app.slug, .status, (.conclusion // "none")] | @tsv')" ||
+    runs="$(gh_read "repos/$conf_repo/commits/$sha/check-runs?per_page=100" \
+      '.check_runs[] | [.name, .app.slug, .status, (.conclusion // "none")] | @tsv')" ||
       refuse "cannot read the check runs of ${sha:0:12}"
   else
-    runs="$(gh api "repos/$conf_repo/actions/runs?head_sha=$sha&event=push&per_page=100" \
-      --jq '.workflow_runs[] | [.path, "", .status, (.conclusion // "none")] | @tsv')" ||
+    runs="$(gh_read "repos/$conf_repo/actions/runs?head_sha=$sha&event=push&per_page=100" \
+      '.workflow_runs[] | [.path, "", .status, (.conclusion // "none")] | @tsv')" ||
       refuse "cannot read the workflow runs of ${sha:0:12}"
   fi
   [ -n "$runs" ] || refuse "no CI run on ${sha:0:12} (not on main, or CI has not started)"
@@ -277,12 +312,12 @@ gate_ci() {
 # 4. The commit is the merge commit of exactly one PR into main, merged by the merger.
 gate_merged_by() {
   local sha="$1" prs by
-  prs="$(gh api "repos/$conf_repo/commits/$sha/pulls" \
-    --jq ".[] | select(.base.ref == \"main\" and .merged_at != null and .merge_commit_sha == \"$sha\") | .number")" ||
+  prs="$(gh_read "repos/$conf_repo/commits/$sha/pulls?per_page=100" \
+    ".[] | select(.base.ref == \"main\" and .merged_at != null and .merge_commit_sha == \"$sha\") | .number")" ||
     refuse "cannot read the PRs of ${sha:0:12}"
   [ -n "$prs" ] || refuse "${sha:0:12} is not the merge commit of a PR into main"
   [[ "$prs" =~ ^[0-9]+$ ]] || refuse "${sha:0:12} is the merge commit of several PRs: ${prs//$'\n'/ }"
-  by="$(gh api "repos/$conf_repo/pulls/$prs" --jq '.merged_by.login // ""')" || refuse "cannot read PR #$prs"
+  by="$(gh_read "repos/$conf_repo/pulls/$prs" '.merged_by.login // ""')" || refuse "cannot read PR #$prs"
   [ "$by" = "$conf_merger" ] || refuse "PR #$prs was merged by '${by:-unknown}', not by '$conf_merger'"
   echo "gate: PR #$prs merged by $conf_merger"
 }

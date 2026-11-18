@@ -70,6 +70,17 @@ class DispatcherTest(unittest.TestCase):
         for tool in ("python3", "shellcheck", "actionlint"):
             line = next(l for l in result.stdout.splitlines() if l.startswith(tool))
             self.assertIn("/installs/", line)
+        # Report 2.4: each tool's resolved version, not only its path (Codex C23).
+        versions = dict(l.split()[:2] for l in result.stdout.splitlines() if l.split() and l.split()[0] in ("python3", "shellcheck", "actionlint"))
+        mise_toml = (ROOT / "mise.toml").read_text()
+        for tool, pinned in (("python3", "python"), ("shellcheck", "shellcheck"), ("actionlint", "actionlint")):
+            self.assertIn(f'{pinned} = "{versions[tool]}"', mise_toml)
+
+    def test_check_commands_run_with_pipefail(self):
+        """Codex C11: a failure early in a pipeline is not hidden by the last command."""
+        fixture = FixtureRepo(self, 'profile = "plugin"\ntools = ["python3"]\ncheck = "false | true"\n[checks]\na = "false | true"\n')
+        self.assertIn("check failed: false | true", run_dev(fixture.dir, "check", env=fixture.env).stderr)
+        self.assertIn("check failed: false | true", run_dev(fixture.dir, "ci", env=fixture.env).stderr)
 
     def test_x_runs_the_pinned_python(self):
         result = run_dev(ROOT, "x", "python3", "-c", "import sys; print(sys.version_info[:2])")
@@ -121,6 +132,11 @@ class DispatcherTest(unittest.TestCase):
             "unsupported value": 'profile = "plugin"\ntools = ["python3"]\n[checks]\na = 3\n',
             "unsupported line": 'profile = "plugin"\nnot toml\n',
             "a check is a string": 'profile = "plugin"\ntools = ["python3"]\n[checks]\na = ["x"]\n',
+            # Codex C12: nothing that would silently drop or split a check.
+            "blank value: a": 'profile = "plugin"\ntools = ["python3"]\n[checks]\na = "  "\n',
+            "blank array item, or whitespace in one: tools": 'profile = "plugin"\ntools = ["python3", ""]\n',
+            "or whitespace in one: tools": 'profile = "plugin"\ntools = ["python3", "a b"]\n',
+            "key given twice: a": 'profile = "plugin"\ntools = ["python3"]\n[checks]\na = "true"\na = "false"\n',
         }
         for message, text in cases.items():
             with self.subTest(message):

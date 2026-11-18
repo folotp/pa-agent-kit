@@ -13,6 +13,7 @@ import pty
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -21,14 +22,24 @@ GATE = ROOT / "harness" / "gate"
 SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 MISE_LOCATIONS = ("/opt/homebrew/bin/mise", "/usr/local/bin/mise", os.path.expanduser("~/.local/bin/mise"))
 
-# Replaces gh: `gh api <path> …` prints the file of that path in $FIX, or fails when there is none.
+# Replaces gh: `gh api [flags] <path> …` prints the file of that path in $FIX (with --paginate also
+# its later pages, <file>.2, <file>.3 …), or fails when there is none; GH_SLEEP makes it hang.
 PRELUDE = r"""
 set -euo pipefail
 source "$GATE"
 gh() {
   [ "$1" = api ] || return 1
-  local f="$FIX/$(printf '%s' "$2" | tr '/?&=' '____')"
-  [ -f "$f" ] && cat "$f"
+  shift
+  local p="" pg="" n=2 f
+  while [ $# -gt 0 ]; do
+    case "$1" in --paginate) pg=1 ;; --jq) shift ;; -*) ;; *) [ -n "$p" ] || p="$1" ;; esac
+    shift
+  done
+  f="$FIX/$(printf '%s' "$p" | tr '/?&=' '____')"
+  [ -f "$f" ] || return 1
+  cat "$f"
+  while [ -n "$pg" ] && [ -f "$f.$n" ]; do cat "$f.$n"; n=$((n + 1)); done
+  [ -z "${GH_SLEEP:-}" ] || sleep "$GH_SLEEP"
 }
 conf_repo=o/r conf_merger=pa conf_verb=deploy conf_ci=check-runs conf_checks_app=github-actions
 conf_required=ci conf_guarded=guarded conf_loaded='*.auto.tfvars'
@@ -108,7 +119,7 @@ class GitFixture:
         sha = sha or self.sha
         self.gh("repos/o/r/commits/main", sha + "\n")
         self.gh(f"repos/o/r/commits/{sha}/check-runs?per_page=100", "ci\tgithub-actions\tcompleted\tsuccess\n")
-        self.gh(f"repos/o/r/commits/{sha}/pulls", "7\n")
+        self.gh(f"repos/o/r/commits/{sha}/pulls?per_page=100", "7\n")
         self.gh("repos/o/r/pulls/7", merger + "\n")
 
     def run(self, script, **env):
@@ -164,6 +175,11 @@ class CleanTreeTest(GateTestCase):
                 git(self.f.work, "update-index", flag, "a.txt")
                 self.assertRefused(self.f.run("gate_clean_tree"), "index entry hides local changes")
                 git(self.f.work, "update-index", flag.replace("--", "--no-"), "a.txt")
+
+    def test_failing_index_listing_is_refused(self):
+        """Codex C11: git's own failure is a refusal, not an empty list."""
+        script = 'git() { if [ "$1 $2" = "ls-files -v" ]; then return 128; fi; command git "$@"; }; gate_clean_tree'
+        self.assertRefused(self.f.run(script), "git ls-files -v failed")
 
     def test_modified_and_untracked_files_are_refused(self):
         (self.f.work / "a.txt").write_text("changed\n")
@@ -249,6 +265,20 @@ class CiTest(GateTestCase):
     def test_required_check_from_another_app_is_refused(self):
         self.assertRefused(self.ci("ci\tsome-app\tcompleted\tsuccess\n"), "no green 'ci' run from github-actions")
 
+    def test_failure_on_a_later_page_is_refused(self):
+        """Codex C10: the gate follows every page, so a failure past the first 100 runs is seen."""
+        path = f"repos/o/r/commits/{self.f.sha}/check-runs?per_page=100"
+        self.f.gh(path + ".2", "late\tgithub-actions\tcompleted\tfailure\n")
+        self.assertRefused(self.ci("ci\tgithub-actions\tcompleted\tsuccess\n"), "CI not green on")
+
+    def test_github_read_that_hangs_is_refused_at_the_deadline(self):
+        """Codex C23: a hung read ends in a refusal, not a stuck gate."""
+        self.f.github_ok()
+        start = time.monotonic()
+        result = self.f.run(f"gate_deadline=1; gate_merged_by {self.f.sha}", GH_SLEEP="20")
+        self.assertRefused(result, "cannot read the PRs")
+        self.assertLess(time.monotonic() - start, 10)
+
 
 class MergedByTest(GateTestCase):
     def test_merged_by_pa_passes(self):
@@ -259,11 +289,11 @@ class MergedByTest(GateTestCase):
         self.assertRefused(self.f.run(f"gate_merged_by {self.f.sha}"), "cannot read the PRs")
 
     def test_commit_without_pr_is_refused(self):
-        self.f.gh(f"repos/o/r/commits/{self.f.sha}/pulls", "")
+        self.f.gh(f"repos/o/r/commits/{self.f.sha}/pulls?per_page=100", "")
         self.assertRefused(self.f.run(f"gate_merged_by {self.f.sha}"), "is not the merge commit of a PR")
 
     def test_several_prs_are_refused(self):
-        self.f.gh(f"repos/o/r/commits/{self.f.sha}/pulls", "7\n8\n")
+        self.f.gh(f"repos/o/r/commits/{self.f.sha}/pulls?per_page=100", "7\n8\n")
         self.assertRefused(self.f.run(f"gate_merged_by {self.f.sha}"), "merge commit of several PRs")
 
     def test_merged_by_someone_else_is_refused(self):
@@ -271,7 +301,7 @@ class MergedByTest(GateTestCase):
         self.assertRefused(self.f.run(f"gate_merged_by {self.f.sha}"), "merged by 'folotp-claude[bot]', not by 'pa'")
 
     def test_unreadable_pr_is_refused(self):
-        self.f.gh(f"repos/o/r/commits/{self.f.sha}/pulls", "7\n")
+        self.f.gh(f"repos/o/r/commits/{self.f.sha}/pulls?per_page=100", "7\n")
         self.assertRefused(self.f.run(f"gate_merged_by {self.f.sha}"), "cannot read PR #7")
 
 
@@ -285,7 +315,7 @@ class RecordTest(GateTestCase):
         """One more commit on main; with `pr`, GitHub calls it the merge commit of that PR."""
         (self.f.work / "a.txt").write_text(message + "\n")
         sha = self.f.commit(message)
-        self.f.gh(f"repos/o/r/commits/{sha}/pulls", f"{pr}\n" if pr else "")
+        self.f.gh(f"repos/o/r/commits/{sha}/pulls?per_page=100", f"{pr}\n" if pr else "")
         if pr:
             self.f.gh(f"repos/o/r/pulls/{pr}", merger + "\n")
         return sha
@@ -546,7 +576,8 @@ class SettingsTest(unittest.TestCase):
             "check-runs needs checks_app": GOOD_GATE.replace('"workflow-runs"', '"check-runs"'),
             "checks_app is for check-runs only": GOOD_GATE + 'checks_app = "github-actions"\n',
             "required lists at least one check": GOOD_GATE.replace('[".github/workflows/ci.yml"]', "[]"),
-            "guarded lists at least one path": GOOD_GATE.replace('[".github", "harness"]', "[]"),
+            "blank array item, or whitespace in one: required": GOOD_GATE.replace('[".github/workflows/ci.yml"]', '[" "]'),
+            "key given twice: merger": GOOD_GATE + 'merger = "someone"\n',
             "bad keep_env": GOOD_GATE + 'keep_env = ["lower"]\n',
             "bad loaded": GOOD_GATE + 'loaded = ["a;b"]\n',
             "tools must include gh": GOOD_GATE.replace('["gh"]', '["git"]'),
@@ -562,6 +593,22 @@ class SettingsTest(unittest.TestCase):
         fixture = ScriptFixture(self, GOOD_GATE)
         (fixture.dir / "release.sh").chmod(0o644)
         self.assertIn("is not an executable file", fixture.run("tree").stderr)
+
+    def test_release_command_must_be_a_tracked_regular_file(self):
+        """Codex C12: an untracked file, or a symbolic link, is not what the checks covered."""
+        fixture = ScriptFixture(self, GOOD_GATE.replace('"release.sh"', '"other.sh"'))
+        (fixture.dir / "other.sh").write_text("#!/bin/sh\n")
+        (fixture.dir / "other.sh").chmod(0o755)
+        self.assertIn("not a tracked regular executable file", fixture.run("tree").stderr)
+        (fixture.dir / "other.sh").unlink()
+        (fixture.dir / "other.sh").symlink_to("release.sh")
+        git(fixture.dir, "add", "other.sh")
+        git(fixture.dir, "commit", "-q", "-m", "link")
+        self.assertIn("not a tracked regular executable file", fixture.run("tree").stderr)
+
+    def test_guarded_may_be_empty_since_the_fixed_set_is_always_guarded(self):
+        result = ScriptFixture(self, GOOD_GATE.replace('[".github", "harness"]', "[]")).run("tree")
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_usage(self):
         result = ScriptFixture(self, GOOD_GATE).run("frobnicate")
@@ -706,7 +753,7 @@ class ReleaseFixture:
         """GitHub answers for a commit that is green and the merge commit of PR `pr`, by `merger`."""
         self.gh("repos/o/r/commits/main", sha + "\n")
         self.gh(f"repos/o/r/commits/{sha}/check-runs?per_page=100", "ci\tgithub-actions\tcompleted\tsuccess\n")
-        self.gh(f"repos/o/r/commits/{sha}/pulls", f"{pr}\n")
+        self.gh(f"repos/o/r/commits/{sha}/pulls?per_page=100", f"{pr}\n")
         self.gh(f"repos/o/r/pulls/{pr}", merger + "\n")
 
     def set_last(self, sha):

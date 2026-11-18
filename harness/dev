@@ -157,13 +157,22 @@ verify_hooks() {
 }
 
 # Printed by check and at the start of ci, so that every log carries the resolved versions.
+# Each tool's version is the one mise resolved it to (`mise which --version`, report 2.4); no tool
+# is run to ask it.
 print_tools() {
-  local t
+  local t version
   printf '%-12s %s\n' profile "$profile"
   printf '%-12s %s %s\n' mise "$("$mise_bin" --version | head -1)" "$mise_bin"
   for t in $tools; do
-    printf '%-12s %s\n' "$t" "$(command -v "$t")"
+    version="$("$mise_bin" which "$t" --version 2>/dev/null)" || die "mise cannot tell the version of $t (run ./dev setup)"
+    printf '%-12s %-10s %s\n' "$t" "$version" "$(command -v "$t")"
   done
+}
+
+# A check command runs in its own bash with pipefail, so a failure early in a pipeline is not
+# hidden by a successful last command (Codex C11).
+run_check() {
+  bash -o pipefail -c "$1" </dev/null
 }
 
 cmd="${1:-}"
@@ -177,7 +186,7 @@ case "$cmd" in
     printf '%-12s %s\n' hooks "$hooks_path"
     # The repository's own offline check (harness.toml `check`): it must contact nothing.
     if [ -n "$check_command" ]; then
-      bash -c "$check_command" </dev/null || die "check failed: $check_command"
+      run_check "$check_command" || die "check failed: $check_command"
     fi
     ;;
   ci)
@@ -187,13 +196,13 @@ case "$cmd" in
     print_tools
     if [ -n "$check_command" ]; then
       echo "== check"
-      bash -c "$check_command" </dev/null || die "check failed: $check_command"
+      run_check "$check_command" || die "check failed: $check_command"
     fi
     [ -n "$checks" ] || die "harness.toml: no checks"
     while IFS="$(printf '\t')" read -r name command_line; do
       [ -n "$name" ] || continue
       echo "== $name"
-      bash -c "$command_line" </dev/null || die "check failed: $name"
+      run_check "$command_line" || die "check failed: $name"
     done <<EOF
 $checks
 EOF
