@@ -6,16 +6,20 @@
 # .codex/hooks.json and .agents/hooks.json. Contract: docs/harness-core.md, 'Guard'.
 #
 # It reads one shell command an agent is about to run and denies:
-#   - always: a push to main or master, a force push, a remote branch deletion, a git hook skipped
-#     with --no-verify, a PR merged or marked ready (PA's actions);
+#   - always: a push to main or master, a push of every branch or of a wildcard refspec, a force
+#     push, a remote branch deletion, a git hook skipped (--no-verify, commit -n, -c
+#     core.hooksPath=), a git alias defined on the command line, a PR merged, marked ready or set
+#     to auto-merge (PA's actions), a release created or edited other than as a draft;
 #   - where nobody answers a prompt (a Claude Code cloud session, a permission mode that does not
 #     ask, or a mode the hook cannot see): the release verbs, `./dev apply` and `./dev deploy`.
-# Anything else passes. Patterns are matched on the command text, so a commit message quoting a
-# denied command is denied too: reword it.
+# Anything else passes. Patterns are matched on the command text after shell quoting is removed,
+# so a commit message quoting a denied command is denied too: reword it. Variables, aliases and
+# functions defined elsewhere, and interpreters (python -c, …), are not seen.
 #
 # Early warning, not the boundary: an agent with a shell can edit this file or its bindings. The
 # boundary is the credentials PA releases (report 2.3). It fails closed: no jq, a payload it
-# cannot read or an unknown agent denies the call. Uses bash builtins and jq only.
+# cannot read (a command that is not a string included) or an unknown agent denies the call.
+# Uses bash 3.2 builtins and jq only (macOS /bin/bash).
 set -uo pipefail
 
 agent="${1:-}"
@@ -37,12 +41,12 @@ command -v jq >/dev/null 2>&1 || deny "jq is missing, so the guard cannot read t
 case "$agent" in
   claude | codex)
     tool="$(printf '%s' "$payload" | jq -er '.tool_name | strings' 2>/dev/null)" || deny "cannot read the hook payload"
-    cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // "" | strings' 2>/dev/null)" || deny "cannot read the hook payload"
+    cmd_path='.tool_input.command'
     mode="$(printf '%s' "$payload" | jq -r '.permission_mode // "" | strings' 2>/dev/null)" || deny "cannot read the hook payload"
     ;;
   antigravity)
     tool="$(printf '%s' "$payload" | jq -er '.toolCall.name | strings' 2>/dev/null)" || deny "cannot read the hook payload"
-    cmd="$(printf '%s' "$payload" | jq -r '.toolCall.args.CommandLine // "" | strings' 2>/dev/null)" || deny "cannot read the hook payload"
+    cmd_path='.toolCall.args.CommandLine'
     mode=""
     ;;
   *) deny "unknown agent '$agent' (claude, codex or antigravity)" ;;
@@ -50,7 +54,24 @@ esac
 
 # Only shell commands are judged. apply_patch (Codex) carries a patch in .tool_input.command.
 case "$tool" in Bash | shell | exec_command | local_shell | run_command) ;; *) exit 0 ;; esac
+
+# A judged command that is present but not a string (an array, a number, an object) denies: the
+# agent may still run it, and the guard cannot say what it is.
+cmd="$(printf '%s' "$payload" | jq -r "$cmd_path"' | if . == null then "" elif type == "string" then . else error("not a string") end' 2>/dev/null)" ||
+  deny "cannot read the hook payload: the command is not a string"
 [ -n "$cmd" ] || exit 0
+
+# Normalise the text into the words the shell would see: join a line continued by a trailing
+# backslash, then drop $'…' and $"…" markers, quotes and backslash escapes, so that
+# `"git" push origin 'main'`, `\git push …` and `HEAD:ma""in` read as plain words. A quoted ; & |
+# becomes a separator, which can only add a denial.
+bs="\\"
+continued="$bs"$'\n'
+norm="${cmd//"$continued"/}"
+norm="${norm//"\$'"/}"
+norm="${norm//"\$\""/}"
+norm="${norm//[\"\']/}"
+norm="${norm//"$bs"/}"
 
 # Where can a prompt be answered? Claude Code documents CLAUDE_CODE_REMOTE=true in cloud
 # sessions. Session 12 measured that an `ask` rule did not prompt in bypass mode; dontAsk refuses
@@ -66,36 +87,86 @@ else
   esac
 fi
 
-sep="(^|[[:space:];&|(\`/\"'])"
-end="([[:space:];&|)\"']|$)"
+sep="(^|[[:space:];&|(\`/])"
+end="([[:space:];&|)]|$)"
 
-# The release verbs, also quoted, through a path, a wrapper or `mise exec`, and the gate's own
-# release entry points.
+# The release verbs, through a path, a wrapper or `mise exec`, and the gate's own release entry
+# points.
 if [ -n "$unattended" ]; then
-  release_re="${sep}[\"']?dev[\"']?[[:space:]]+[\"']?(apply|deploy)${end}"
-  gate_re="${sep}[\"']?gate[\"']?[[:space:]]+[\"']?(release|--stage2)${end}"
-  if [[ "$cmd" =~ $release_re ]] || [[ "$cmd" =~ $gate_re ]]; then
+  release_re="${sep}dev[[:space:]]+(apply|deploy)${end}"
+  gate_re="${sep}gate[[:space:]]+(release|--stage2)${end}"
+  if [[ "$norm" =~ $release_re ]] || [[ "$norm" =~ $gate_re ]]; then
     deny "the release verbs are not available in $unattended: run ./dev apply or ./dev deploy in your own terminal"
   fi
 fi
 
-# Judged per simple command: split on ; & | and newlines.
+# The GraphQL mutations that merge a PR, mark it ready or set it to merge itself, anywhere in the
+# command (gh api graphql, curl, …).
+if [[ "$norm" =~ (mergePullRequest|markPullRequestReadyForReview|enablePullRequestAutoMerge) ]]; then
+  deny "PA merges PRs and marks them ready"
+fi
+
+# `gh <group>`, then flags (each with at most one value), then the verb: matches
+# `gh pr -R o/r merge 5`, not `gh pr create --title ready to merge`.
+flags="([[:space:]]+-[^[:space:]]*([[:space:]]+[^-[:space:]][^[:space:]]*)?)*"
+
 git_re="${sep}git[[:space:]]"
 push_re="${sep}git[[:space:]]+([^[:space:]]+[[:space:]]+)*push${end}"
+commit_re="${sep}git[[:space:]]+([^[:space:]]+[[:space:]]+)*commit${end}"
 main_re="[[:space:]:+](refs/heads/)?(main|master)${end}"
-force_re="[[:space:]](--force|--force-with-lease(=[^[:space:]]*)?|--force-if-includes|-f|--mirror|--delete|-d|--prune)${end}|[[:space:]]\+[^[:space:]]|[[:space:]]:[^[:space:]]"
-merge_re="${sep}gh[[:space:]]+pr[[:space:]]+(merge|ready)${end}|${sep}gh[[:space:]]+api[[:space:]].*pulls/[0-9]+/merge${end}"
-while IFS= read -r part; do
-  if [[ "$part" =~ $git_re ]] && [[ "$part" == *--no-verify* ]]; then
-    deny "--no-verify skips the git hooks"
+# --force, --mirror, --all, --delete, --prune and their abbreviations (git accepts a unique prefix
+# of a long option); a short-flag cluster holding f or d before the value-taking -o (`-fu`); a
+# +refspec; a :refspec (deletion) or a bare : (every matching branch); a wildcard refspec.
+force_re="[[:space:]](--for[a-z-]*(=[^[:space:]]*)?|--mi[a-z]*|--al[a-z]*|--de[a-z]*|--pru[a-z]*)${end}|[[:space:]]-[^-[:space:]o=]*[fd]|[[:space:]]\+[^[:space:]]|[[:space:]]:|[*]"
+# commit -n is --no-verify: a short-flag cluster holding n before any value-taking flag.
+commit_n_re="[[:space:]]-[^-[:space:]mCcFtuS=]*n"
+# -c or --config-env setting an alias (it hides the verb) or core.hooksPath (it skips the hooks);
+# matched without case, as git reads the keys.
+config_re="[[:space:]](-c[[:space:]]*|--config-env[[:space:]=]+)(alias\.|core\.hookspath)"
+merge_re="${sep}gh[[:space:]]+pr${flags}[[:space:]]+(merge|ready)${end}|${sep}gh[[:space:]]+api[[:space:]].*pulls/[0-9]+/merge${end}"
+release_create_re="${sep}gh[[:space:]]+release${flags}[[:space:]]+(create|new)${end}"
+release_edit_re="${sep}gh[[:space:]]+release${flags}[[:space:]]+edit${end}"
+api_release_re="${sep}gh[[:space:]]+api[[:space:]].*releases"
+# Draft flags as gh parses booleans (true: 1 t T true TRUE True; false: 0 f F false FALSE False).
+draft_re="[[:space:]](--draft(=([tT]([rR][uU][eE])?|1))?|-d)${end}"
+undraft_re="draft=([fF]([aA][lL][sS][eE])?|0)${end}"
+# gh api writes with -X/--method POST|PATCH|PUT, or by default as soon as it sends a field.
+api_write_re="[[:space:]](-X|--method)[[:space:]=]*([pP][oO][sS][tT]|[pP][aA][tT][cC][hH]|[pP][uU][tT])|[[:space:]](-f|-F|--field|--raw-field|--input)([[:space:]=]|$)"
+
+# Judged per simple command: split on ; & | and newlines. Split with parameter expansion, not a
+# here-document: bash writes a here-document to a temporary file, and where it cannot (an
+# unwritable TMPDIR, a sandbox) the loop read nothing and every command passed.
+nl=$'\n'
+rest="${norm//[;&|]/$nl}"
+while [ -n "$rest" ]; do
+  part="${rest%%"$nl"*}"
+  if [ "$part" = "$rest" ]; then rest=""; else rest="${rest#*"$nl"}"; fi
+  if [[ "$part" =~ $git_re ]]; then
+    [[ "$part" != *--no-veri* ]] || deny "--no-verify skips the git hooks"
+    shopt -s nocasematch
+    if [[ "$part" =~ $config_re ]]; then
+      shopt -u nocasematch
+      deny "git -c alias.* and -c core.hooksPath are refused: an alias hides the verb, hooksPath skips the hooks"
+    fi
+    shopt -u nocasematch
+  fi
+  if [[ "$part" =~ $commit_re ]] && [[ "$part" =~ $commit_n_re ]]; then
+    deny "git commit -n is --no-verify: it skips the git hooks"
   fi
   if [[ "$part" =~ $push_re ]]; then
     [[ ! "$part" =~ $main_re ]] || deny "pushes to main go through a PR that PA merges"
-    [[ ! "$part" =~ $force_re ]] || deny "force pushes and remote branch deletions are PA's"
+    [[ ! "$part" =~ $force_re ]] || deny "force pushes, pushes of every branch and remote branch deletions are PA's"
   fi
   [[ ! "$part" =~ $merge_re ]] || deny "PA merges PRs and marks them ready"
-done <<EOF
-${cmd//[;&|]/$'\n'}
-EOF
+  if [[ "$part" =~ $release_create_re ]] || [[ "$part" =~ $release_edit_re ]] || [[ "$part" =~ $api_release_re ]]; then
+    [[ ! "$part" =~ $undraft_re ]] || deny "releases stay drafts: PA publishes them"
+  fi
+  if [[ "$part" =~ $release_create_re ]] && [[ ! "$part" =~ $draft_re ]]; then
+    deny "releases stay drafts: create them with --draft, PA publishes them"
+  fi
+  if [[ "$part" =~ $api_release_re ]] && [[ "$part" =~ $api_write_re ]] && [[ "$part" != *draft=true* ]]; then
+    deny "releases stay drafts: a release written through gh api needs draft=true, PA publishes them"
+  fi
+done
 
 exit 0

@@ -34,6 +34,49 @@ ALWAYS_DENIED = [
     "gh pr ready 83",
     "gh api -X PUT repos/o/r/pulls/83/merge",
     "ls; gh pr merge 83",
+    # Session 24 (K3): quoting, escapes and continued lines are removed before matching.
+    '"git" push origin main',
+    "\\git push origin main",
+    'git push origin "main"',
+    "git push origin 'main'",
+    'git push origin HEAD:"main"',
+    "git push origin $'main'",
+    'git push origin HEAD:ma""in',
+    "git push origin \\\nmain",
+    "git push \\\n  --force origin feat",
+    # K3: every branch, wildcard and matching refspecs, combined and abbreviated flags.
+    "git push origin --all",
+    "git push origin 'refs/heads/*:refs/heads/*'",
+    "git push origin :",
+    "git push -fu origin feat",
+    "git push -uf origin feat",
+    "git push --forc origin feat",
+    "git push --del origin feat",
+    # K3: hooks skipped and verbs hidden on the command line.
+    "git commit -n -m wip",
+    "git commit -anm wip",
+    "git -c core.hooksPath=/dev/null commit -m wip",
+    "git -c core.hookspath=/dev/null commit -m wip",
+    "git --config-env=core.hooksPath=EMPTY commit -m wip",
+    "git -c alias.p=push p origin main",
+    "git -c alias.c=commit c -m wip",
+    # K2: flags before the verb, and the GraphQL mutations anywhere.
+    "gh pr -R folotp/pa-agent-kit merge 5",
+    "gh pr --repo folotp/pa-agent-kit ready 5",
+    "gh pr -R folotp/pa-agent-kit merge --help",
+    "gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }'",
+    "gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {pullRequestId: \"X\"}) { clientMutationId } }'",
+    "gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {pullRequestId: \"X\"}) { clientMutationId } }'",
+    # K8: releases stay drafts.
+    "gh release create plugin/v1.0.0",
+    "gh release create plugin/v1.0.0 --notes x",
+    "gh release create plugin/v1.0.0 --draft=false",
+    "gh release -R o/r new plugin/v1.0.0",
+    "gh release edit plugin/v1.0.0 --draft=false",
+    "gh release edit plugin/v1.0.0 --draft=0",
+    "gh api -X POST repos/o/r/releases -f tag_name=v1",
+    "gh api repos/o/r/releases -f tag_name=v1",
+    "gh api --method PATCH repos/o/r/releases/5 -F draft=false",
 ]
 
 ALWAYS_ALLOWED = [
@@ -46,6 +89,29 @@ ALWAYS_ALLOWED = [
     "./dev gate",
     "./dev ci",
     "grep -n deploy docs/x.md",
+    # Near misses of the session 24 patterns (K2, K3, K8).
+    "git push origin HEAD:mainline",
+    "git push origin feature/main-fix",
+    "git push origin 'HEAD:refs/heads/feat'",
+    "git push --follow-tags origin HEAD:refs/heads/feat",
+    "git push -o ci.skip origin HEAD:refs/heads/feat",
+    "git push -u origin HEAD:refs/heads/feat",
+    "git log --grep main",
+    "git commit -m 'fix n'",
+    "git commit -sm wip",
+    "git commit --amend --no-edit",
+    "git -C /tmp/x status",
+    "git config --get core.hooksPath",
+    "gh pr view 5",
+    "gh pr create --title 'ready to merge' --body x",
+    "gh pr -R folotp/pa-agent-kit view 5",
+    "gh release create v1 --draft",
+    "gh release create plugin/v1.0.0 -d --notes x",
+    "gh release create plugin/v1.0.0 --draft=true",
+    "gh release view plugin/v1.0.0",
+    "gh release upload plugin/v1.0.0 x.zip",
+    "gh api repos/o/r/releases",
+    "gh api -X POST repos/o/r/releases -F draft=true -f tag_name=v1",
 ]
 
 RELEASES = [
@@ -138,6 +204,21 @@ class GuardTest(unittest.TestCase):
         self.assertDenied(run_guard("antigravity", {"tool_name": "Bash"}), "cannot read the hook payload", "antigravity")
         self.assertDenied(run_guard("gemini", claude("git status")), "unknown agent")
         self.assertDenied(run_guard("", claude("git status")), "unknown agent")
+        # Session 24b: the split used a here-document, which needs a writable temporary folder;
+        # without one every command passed.
+        self.assertDenied(run_guard("claude", claude("ls; git push origin main"), {"TMPDIR": "/nonexistent"}))
+
+    def test_a_judged_command_that_is_not_a_string_denies(self):
+        # Session 24 (K3): an array or a number used to read as empty and pass.
+        for value in (["git", "push", "origin", "main"], 5, {"argv": ["ls"]}, True):
+            with self.subTest(value=value):
+                self.assertDenied(run_guard("claude", claude(value)), "not a string")
+                self.assertDenied(run_guard("codex", claude(value, "bypassPermissions")), "not a string")
+                self.assertDenied(run_guard("antigravity", antigravity(value)), "not a string", "antigravity")
+        # A tool that is not judged keeps passing whatever it carries; a missing command passes.
+        self.assertAllowed(run_guard("claude", claude(["git", "push", "origin", "main"], tool="Read")))
+        self.assertAllowed(run_guard("claude", {"tool_name": "Bash", "tool_input": {}, "permission_mode": "default"}))
+        self.assertAllowed(run_guard("claude", claude(None)))
 
 
 class BindingTest(unittest.TestCase):

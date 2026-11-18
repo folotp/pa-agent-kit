@@ -216,12 +216,26 @@ The tests replace GitHub with a `gh` shell function that answers from files: the
 
 | When | What | Why |
 |---|---|---|
-| Always | a push to `main` or `master`; a force push (`--force`, `-f`, `--force-with-lease`, `+refspec`, `--mirror`); a remote branch deletion (`--delete`, `-d`, `:branch`, `--prune`); `--no-verify` on any git command; `gh pr merge`, `gh pr ready`, the merge API | PA merges; the git hooks run `./dev check` |
+| Always | a push to `main` or `master`; a push of every branch (`--all`, `--mirror`, a bare `:`) or of a wildcard refspec (`refs/heads/*:…`); a force push (`--force`, `-f`, `--force-with-lease`, `--force-if-includes`, `+refspec`, a short-flag cluster holding `f` such as `-fu`); a remote branch deletion (`--delete`, `-d`, `:branch`, `--prune`); git's abbreviations of those long options (`--forc`, `--del`); a skipped git hook (`--no-verify` on any git command, `git commit -n`, `-c core.hooksPath=` or `--config-env=core.hooksPath=` on any git command); a git alias defined on the command line (`-c alias.…`) | PA merges; the git hooks run `./dev check` |
+| Always | `gh pr merge` and `gh pr ready`, with any flags before the verb (`gh pr -R o/r merge 5`); the REST merge endpoint; the GraphQL mutations `mergePullRequest`, `markPullRequestReadyForReview` and `enablePullRequestAutoMerge` anywhere in a command | PA merges and marks PRs ready (session 24, K2) |
+| Always | `gh release create` (or `new`) without `--draft`/`-d`; `--draft=false` (or `0`, `f`) on `gh release create` or `edit`; a `gh api` write to a `releases` path (a POST, PATCH or PUT, or any field) without `draft=true`, or with `draft=false` | releases stay drafts until PA publishes them; with immutability on, a published release is permanent (K8) |
 | Where nobody answers a prompt | `./dev apply`, `./dev deploy` (quoted, through a path, `mise exec`, `gh-token.sh` or `bash -c` too) and `gate release` / `gate --stage2` | the release confirms on the terminal and prompts in the Keychain |
 
 "Where nobody answers a prompt" means: a Claude Code cloud session (`CLAUDE_CODE_REMOTE=true`); a permission mode other than `default`, `acceptEdits`, `plan` or `auto` (`bypassPermissions`, where session 12 saw an `ask` rule not prompt; `dontAsk`; a missing mode); and Antigravity, whose payload carries no mode. Everything else passes: the guard is not a permission system, and the repository's own rules and hooks (the connector guards of `ha-config`, for instance) stay beside it.
 
-It fails closed: no `jq`, a payload it cannot read or an unknown agent denies the call. It uses bash builtins and `jq` only (`/usr/bin/jq` ships with macOS; CI runners have it). Commands are matched as text, one simple command at a time (split on `;`, `&`, `|` and newlines), so a commit message that quotes a denied command is denied too: reword it. Early warning, not the boundary (report 2.3): an agent with a shell can edit the guard or its bindings, and a hook that cannot start (missing file, not executable) lets the call through in all three agents.
+It fails closed: no `jq`, a payload it cannot read, a judged command that is present but not a string (an array, a number) or an unknown agent denies the call. It uses bash 3.2 builtins and `jq` only (`/usr/bin/jq` ships with macOS; CI runners have it) and writes no temporary file (until session 24b a here-document did, and an unwritable temporary folder let every command through).
+
+Commands are matched as text after a normalisation: a line ending in a backslash is joined to the next, and `$'…'`/`$"…"` markers, `"` and `'` quotes and backslash escapes are removed, so `"git" push origin 'main'`, `\git push …`, `HEAD:ma""in` and `HEAD:$'main'` read as plain words. The text is then judged one simple command at a time (split on `;`, `&`, `|` and newlines). So a commit message that quotes a denied command is denied too: reword it, or put a test payload in a file.
+
+What it cannot see, by design (it reads text, not the shell's evaluation):
+
+- a bare `git push` (or `git push origin HEAD`) while the checked-out branch is `main`: the destination comes from the branch and its upstream, not the text;
+- variables, command substitutions and `${IFS}` tricks (`b=main; git push origin HEAD:$b`), and git or shell aliases, functions or `push.default`/`remote.*.push` settings defined elsewhere (config files, the environment, `GIT_CONFIG_*`);
+- interpreters and scripts: `python3 -c`, `node -e`, a script file, `make`, a GraphQL query read from a file (`-f query=@file`), `curl` to the REST API;
+- other GitHub REST writes to `main` (`/merges`, `/contents`, `/git/refs`): branch protection holds them in the workshop, the gate's merged-by-PA check in the live repositories;
+- tools other than the shell (the matchers are `Bash` and `run_command`).
+
+Early warning, not the boundary (report 2.3): an agent with a shell can edit the guard or its bindings, and a hook that cannot start (missing file, not executable) lets the call through in all three agents.
 
 ### Bindings
 
