@@ -277,7 +277,7 @@ This repository has no skills of its own yet: its two helpers are slash commands
 
 ## Path filters
 
-`validate.yml` keeps one always-running job, `Marketplace validation` (the required check). A `changes` job lists the plugins whose files differ from the PR base, and each plugin's own job runs only when its path changed; pushes to `main` and manual runs check every plugin. See `docs/protected-main.md`. This replaces the PR check planner of the imported Python harness and the per-agent acceptance matrix, which the core does not carry.
+`validate.yml` keeps one always-running core job, `Core checks` (`./dev ci`). A `changes` job lists the plugins whose files differ from the PR base, and each plugin's own job runs only when its path changed; pushes to `main` and manual runs check every plugin. On a PR, `Version bump` fails when a plugin's files changed and its version did not (`scripts/check-version-bump.py`). The required check, `Marketplace validation`, is an aggregate job that runs last, also after a failure, and passes only when the core checks and the filter succeeded and every other job succeeded or was skipped (session 24b, K4 and K5). See `docs/protected-main.md`. This replaces the PR check planner of the imported Python harness and the per-agent acceptance matrix, which the core does not carry.
 
 ## Spec tracking (`specs.lock`)
 
