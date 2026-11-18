@@ -8,11 +8,13 @@ bytes. <target> is the consumer's checkout.
 What it writes in the target, on a new branch `harness-sync/<rev>`, in one commit:
   1. `.harness/`: replaced as a whole by the files named in `harness/core.files`, byte for byte.
      Nothing in it is ever merged or edited in place, so there is nothing to resolve.
-     `.harness/VERSION` records the revision; `.harness/CHECKSUMS` lists a sha256 per file, which
+     Every file is read from the resolved commit, not the revision name. `.harness/VERSION` records
+     the revision and commit; `.harness/CHECKSUMS` lists mode, sha256 and path per file, which
      `./dev check` verifies. The checksum detects drift, not tampering: an agent could change both.
   2. Root files, written only where the target has none: the `dev` shim, the agent bindings of
-     `harness/bindings/` and the `CLAUDE.md` stub. A file that exists and differs is left alone and
-     named in the report: the consumer's own settings are never overwritten.
+     `harness/bindings/` and the `CLAUDE.md` stub. The consumer's own files are never overwritten,
+     but one that differs leaves part of the core unwired, so sync refuses (exit 1, nothing
+     written) unless `--keep-root <file>` names it; a kept file is reported with what stays unwired.
   3. The shared block of `AGENTS.md` (between `harness:shared:begin` and `harness:shared:end`):
      replaced when both markers are present, otherwise reported.
   4. The `.claude/skills` symlink is only checked and reported.
@@ -53,15 +55,19 @@ def git(cwd, *args, check=True, text=True):
     return result
 
 
-def core_files(rev):
-    """Return {path under harness/: (mode, bytes)} for the core at `rev`."""
-    manifest = git(WORKSHOP, "show", f"{rev}:harness/core.files").stdout
+def core_files(commit):
+    """Return {path under harness/: (mode, bytes)} for the core at `commit`.
+
+    `commit` is the resolved commit ID, never a revision name: a tag or branch that moves while
+    sync runs could otherwise give files that disagree with VERSION (Codex C6).
+    """
+    manifest = git(WORKSHOP, "show", f"{commit}:harness/core.files").stdout
     wanted = [l.strip() for l in manifest.splitlines() if l.strip() and not l.startswith("#")]
     files = {}
     for entry in wanted:
-        listing = git(WORKSHOP, "ls-tree", "-r", rev, "--", f"harness/{entry}").stdout.splitlines()
+        listing = git(WORKSHOP, "ls-tree", "-r", commit, "--", f"harness/{entry}").stdout.splitlines()
         if not listing:
-            raise SyncError(f"core.files names {entry!r}, which does not exist at {rev}")
+            raise SyncError(f"core.files names {entry!r}, which does not exist at {commit[:12]}")
         for line in listing:
             meta, path = line.split("\t", 1)
             mode, kind, blob = meta.split()
@@ -90,8 +96,38 @@ def replace_shared_block(current, template):
     return head + template.strip("\n") + tail
 
 
-def install(target, rev, commit, files):
-    """Write the target tree. Returns the report lines."""
+def root_files(files):
+    """Return {root file of the consumer: the core file it is a copy of}."""
+    roots = {"dev": "templates/dev", "CLAUDE.md": "templates/CLAUDE.md"}
+    for name in files:
+        if name.startswith("bindings/"):
+            roots[name[len("bindings/"):]] = name
+    return roots
+
+
+def unwired(dest):
+    """What stays unwired while the root file `dest` is not the core's template (finding K22)."""
+    clients = {".claude/settings.json": "Claude Code", ".codex/hooks.json": "Codex", ".agents/hooks.json": "Antigravity"}
+    if dest == "dev":
+        return "the core dispatcher (./dev check, gate, release verbs, git hooks of ./dev setup)"
+    if dest in clients:
+        return f"the core guard hook for {clients[dest]}"
+    if dest == "CLAUDE.md":
+        return "the CLAUDE.md stub that imports AGENTS.md"
+    return "the core's copy of this file"
+
+
+def differing_roots(target, files):
+    """Root files that exist in the target and differ from their core template."""
+    return sorted(
+        dest for dest, source in root_files(files).items()
+        if (target / dest).exists() and (target / dest).read_bytes() != files[source][1]
+    )
+
+
+def install(target, rev, commit, files, kept=()):
+    """Write the target tree. Returns the report lines. `kept` are differing root files that
+    the caller named with --keep-root; main() refused any other differing root file before."""
     report = []
     harness = target / ".harness"
     if harness.exists():
@@ -99,26 +135,27 @@ def install(target, rev, commit, files):
     for name, (mode, data) in files.items():
         write(harness / name, data, mode)
     write(harness / "VERSION", f"core {rev}\ncommit {commit}\n".encode(), 0o644)
+    # One line per file: mode, sha256, path (`./dev check` verifies all three; Codex C6).
+    modes = {name: mode for name, (mode, _) in files.items()}
     sums = sorted(
-        (hashlib.sha256((harness / p).read_bytes()).hexdigest(), p)
+        (p, modes.get(p, 0o644), hashlib.sha256((harness / p).read_bytes()).hexdigest())
         for p in [*files, "VERSION"]
     )
-    write(harness / "CHECKSUMS", "".join(f"{h}  {p}\n" for h, p in sums).encode(), 0o644)
-    report.append(f"- `.harness/` replaced: {len(files)} core files, VERSION, CHECKSUMS")
+    write(harness / "CHECKSUMS", "".join(f"{m:o} {h} {p}\n" for p, m, h in sums).encode(), 0o644)
+    report.append(f"- `.harness/` replaced: {len(files)} core files, VERSION, CHECKSUMS (with modes)")
 
-    # Root file -> the core file it comes from.
-    roots = {"dev": "templates/dev", "CLAUDE.md": "templates/CLAUDE.md"}
-    for name in files:
-        if name.startswith("bindings/"):
-            roots[name[len("bindings/"):]] = name
-    for dest, source in sorted(roots.items()):
+    for dest, source in sorted(root_files(files).items()):
         mode, data = files[source]
         path = target / dest
         if not path.exists():
             write(path, data, mode)
             report.append(f"- `{dest}` installed (was absent)")
         elif path.read_bytes() != data:
-            report.append(f"- `{dest}` DIFFERS from the core template; left as it is (compare with `.harness/{source}`)")
+            if dest not in kept:
+                raise SyncError(f"{dest} differs from the core template and was not named with --keep-root")
+            report.append(
+                f"- `{dest}` DIFFERS from the core template; kept by --keep-root, so {unwired(dest)} "
+                f"stays unwired (compare with `.harness/{source}`)")
 
     agents = target / "AGENTS.md"
     template = files["templates/AGENTS.shared.md"][1].decode()
@@ -146,6 +183,8 @@ def main(argv):
     parser.add_argument("rev", help="core tag (harness-vX.Y) or commit-ish of this repository")
     parser.add_argument("target", help="checkout of the consumer repository")
     parser.add_argument("--pr", action="store_true", help="push the branch and open the PR with gh")
+    parser.add_argument("--keep-root", action="append", default=[], metavar="FILE",
+                        help="keep this differing root file (dev, CLAUDE.md, a binding) as it is; repeatable")
     args = parser.parse_args(argv)
 
     target = Path(args.target).resolve()
@@ -161,10 +200,22 @@ def main(argv):
     if git(target, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", check=False).returncode == 0:
         raise SyncError(f"branch {branch} already exists in the target")
 
-    files = core_files(args.rev)
+    files = core_files(commit)
+    roots = root_files(files)
+    unknown = sorted(set(args.keep_root) - set(roots))
+    if unknown:
+        raise SyncError(f"--keep-root names no root file of the core: {', '.join(unknown)} (root files: {', '.join(sorted(roots))})")
+    # A differing root file leaves part of the core unwired (finding K22): refused unless named.
+    refused = [dest for dest in differing_roots(target, files) if dest not in args.keep_root]
+    if refused:
+        lines = "\n".join(f"  {dest}: {unwired(dest)} would stay unwired" for dest in refused)
+        raise SyncError(
+            f"root files differ from the core templates at {args.rev}:\n{lines}\n"
+            "Make each one the template (delete it and sync again, or merge the template into it), "
+            "or keep it on purpose with --keep-root <file>.")
     git(target, "switch", "-c", branch)
     try:
-        report = install(target, args.rev, commit, files)
+        report = install(target, args.rev, commit, files, kept=args.keep_root)
         git(target, "add", "-A")
         if not git(target, "status", "--porcelain").stdout.strip():
             raise SyncError("nothing changed: the target already has this core")
