@@ -2,6 +2,10 @@
 
 `main` requires a pull request and the `Marketplace validation` check (the aggregate job of `validate.yml`), enforced for administrators; force pushes and deletion are off; the repository allows squash merges only. There is no automation that writes to `main`: a human merges every change, and no workflow holds a credential that can bypass the protection.
 
+**Code owners.** `.github/CODEOWNERS` names PA (`* @folotp`) for every path. It changes nothing until PA turns on 'Require review from Code Owners' (one approval, stale approvals dismissed) in branch protection, planned with the tag ruleset in session 25. Then a PR needs PA's approval, so a bot App, which holds Contents and Pull-requests write, cannot merge its own PR even outside the guard (session 24, K2). Until then, the guard and PA's merge habit are what stop a bot merge.
+
+**Dependabot.** `.github/dependabot.yml` updates the SHA-pinned GitHub Actions only: monthly, one grouped PR, releases at least 7 days old (report 2.8). Its PRs pass the same required check as any other.
+
 ## Source map and contracts
 
 | Source | Responsibility |

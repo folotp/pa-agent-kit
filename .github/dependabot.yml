@@ -1,8 +1,16 @@
+# Version updates for the SHA-pinned actions only (report 2.8): monthly, in one PR, and only for
+# releases at least 7 days old. Every other pin moves in the twice-yearly harness review; security
+# updates (a repository setting) cover the gap. Aligned in session 24b (K13).
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]
     commit-message:
       prefix: chore(actions)
