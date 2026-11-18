@@ -52,6 +52,14 @@ Net effect: when `organon-frontmatter` triggers (drafting an ADR / VLT-BUG / FIN
 
 Historical record: each entry cites paths and components as they were at that release, and many have since been retired.
 
+### v1.5.6 (Shared development architecture and doc fixes)
+
+- Memory-audit report template: full repository path for `AUDIT_KEYWORDS` (#129).
+- The root cause of #121 is recorded and the delete tools persist (#130).
+- Shared development checks across AI agents and worktrees, adapters and release integration completed, merged release driver pinned (#132, #134, #135).
+- Docs: shared development architecture and code contracts (#136); the pa-toolkit row of the architecture table names the workshop's job instead of the retired `release-checks.yml`.
+- Read-only dev check and MCP reads allowed without prompts (#139).
+
 ### v1.5.5 (Subagent fixes and memory-audit cleanup)
 
 - The memory audit drops the retired Cowork store and the Chat/Cowork split (#124).

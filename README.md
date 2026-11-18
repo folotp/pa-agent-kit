@@ -19,7 +19,7 @@ Codex: `codex plugin marketplace add folotp/pa-agent-kit`, then `codex plugin ad
 | --- | --- | --- | --- |
 | [`projectionlab`](plugins/projectionlab/) | 0.1.0 | in-repo | Read-only access to ProjectionLab financial plans via the Chrome MCP. |
 | [`session-telemetry`](plugins/session-telemetry/) | 0.2.1 | in-repo | Captures a structured snapshot of the current Claude session and appends one NDJSON line to the Organon vault telemetry log via Organon MCP. |
-| [`organon`](plugins/organon/) | 1.5.5 | in-repo | Organon vault conventions for Claude — 8 description-triggered skills covering read and write discipline, frontmatter, markdown style, session discipline, Bases, JSON Canvas, and diagramming. |
+| [`organon`](plugins/organon/) | 1.5.6 | in-repo | Organon vault conventions for Claude — 8 description-triggered skills covering read and write discipline, frontmatter, markdown style, session discipline, Bases, JSON Canvas, and diagramming. |
 | [`pa-toolkit`](plugins/pa-toolkit/) | 0.1.4 | in-repo | PA's personal toolkit — decision-gatekeeper agent (triages a proposed change against a domain's decision records, driven by governance profiles in the Organon vault), six fin-* PocketSmith/Rogers skills, and a generalized plugin-release runbook for all of PA's plugins. |
 
 ## Plugin sources
