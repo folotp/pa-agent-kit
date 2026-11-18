@@ -14,6 +14,7 @@
 #
 # <app> is one of: claude, codex, antigravity.
 # --repo defaults to the origin remote of the current directory.
+# --read-only narrows every permission of the token to read (the release gate's reads).
 #
 # Secrets: the App key and every token stay in shell variables and pipes.
 # Nothing is written to disk, nothing is logged, and no error message
@@ -39,7 +40,7 @@ app_client_id() {
 die() { printf 'gh-token: %s\n' "$*" >&2; exit 1; }
 
 usage() {
-  sed -n '9,16p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '9,17p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -102,6 +103,18 @@ export_git_auth() {
   export GIT_CONFIG_KEY_2="url.https://github.com/.insteadOf" GIT_CONFIG_VALUE_2="git@github.com:"
 }
 
+# token_request NAME INSTALLATION_JSON READ_ONLY: the body of the token request. The token is
+# always limited to the one repository NAME; with READ_ONLY non-empty, every permission the
+# installation holds is requested at level read (GitHub accepts a subset of the installation's
+# permissions, and refuses the request rather than widen one).
+token_request() {
+  if [[ -n $3 ]]; then
+    printf '%s' "$2" | jq -c --arg r "$1" '{repositories: [$r], permissions: (.permissions | map_values("read"))}'
+  else
+    jq -cn --arg r "$1" '{repositories: [$r]}'
+  fi
+}
+
 run_as_pa() {
   local token
   [[ $# -gt 0 ]] || die "pa needs a command after --"
@@ -116,7 +129,7 @@ run_as_pa() {
 main() {
   [[ $# -ge 1 ]] || usage
   local app=$1; shift
-  local repo="" mode=print
+  local repo="" mode=print read_only=""
   case $app in -h|--help) usage ;; esac
 
   if [[ $app == pa ]]; then
@@ -129,13 +142,14 @@ main() {
     case $1 in
       --repo) repo=${2:?--repo needs OWNER/NAME}; shift 2 ;;
       --info) mode="info"; shift ;;
+      --read-only) read_only=1; shift ;;
       --) mode="exec"; shift; break ;;
       *) usage ;;
     esac
   done
   [[ $mode != exec || $# -gt 0 ]] || die "no command after --"
 
-  local client_id key_b64 pem jwt install_id token_json token slug bot_id
+  local client_id key_b64 pem jwt install_json install_id token_json token slug bot_id
   client_id=$(app_client_id "$app") || die "unknown app: $app (claude, codex, antigravity)"
   [[ -n $client_id ]] || die "no Client ID recorded for $app in this script"
   repo=$(resolve_repo "$repo")
@@ -148,9 +162,10 @@ main() {
 
   jwt=$(app_jwt "$client_id" "$pem")
   unset pem
-  install_id=$(api GET "/repos/$repo/installation" Bearer "$jwt" | jq -r '.id')
+  install_json=$(api GET "/repos/$repo/installation" Bearer "$jwt")
+  install_id=$(printf '%s' "$install_json" | jq -r '.id')
   token_json=$(api POST "/app/installations/$install_id/access_tokens" Bearer "$jwt" \
-    "$(jq -cn --arg r "${repo#*/}" '{repositories: [$r]}')")
+    "$(token_request "${repo#*/}" "$install_json" "$read_only")")
 
   if [[ $mode == info ]]; then
     # Scope and expiry only: the token itself is dropped, then revoked.

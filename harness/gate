@@ -158,10 +158,11 @@ EOF
 }
 
 # The gate reads GitHub with the bot token that gh-token.sh puts in GH_TOKEN; no shell keeps a
-# stored GitHub login. Without it, refuse at once rather than let git ask for a password.
+# stored GitHub login. Without it, refuse at once rather than let git ask for a password. The
+# gate only reads, so the token it is meant to get is the read-only one (--read-only).
 need_gh_token() {
   [ -n "${GH_TOKEN:-}" ] ||
-    refuse "no GitHub token: run it as $(basename "$here")/gh-token.sh claude -- ./dev … (the gate only reads GitHub)"
+    refuse "no GitHub token: run it as $(basename "$here")/gh-token.sh claude --read-only -- ./dev … (the gate only reads GitHub)"
 }
 
 # 2. HEAD is the tip of origin/main, and origin/main is main on GitHub.
@@ -295,6 +296,14 @@ gate_guarded_diff() {
 
 # --- The release ------------------------------------------------------------------------------
 
+# The bot token (GH_TOKEN, and the GIT_CONFIG_* entries through which git uses it) is for the
+# gate's GitHub reads only: nothing of the repository runs with it.
+drop_github_auth() {
+  local v
+  unset GH_TOKEN GIT_CONFIG_COUNT
+  for v in $(compgen -e); do case "$v" in GIT_CONFIG_KEY_* | GIT_CONFIG_VALUE_*) unset "$v" ;; esac; done
+}
+
 record() { # sha result
   mkdir -p "$record_dir"
   [ "$2" != ok ] || printf '%s\n' "$1" >"$record_dir/last"
@@ -306,10 +315,9 @@ record() { # sha result
 # validates its own arguments before reading any credential. Exit 0: released, recorded; exit
 # NOTHING_RELEASED: nothing released, nothing recorded; anything else: failed, logged only.
 run_release() {
-  local sha="$1" rc=0 v
+  local sha="$1" rc=0
   shift
-  unset GH_TOKEN GIT_CONFIG_COUNT
-  for v in $(compgen -e); do case "$v" in GIT_CONFIG_KEY_* | GIT_CONFIG_VALUE_*) unset "$v" ;; esac; done
+  drop_github_auth
   echo "== $conf_release ${sha:0:12} $*"
   GATE_SHA="$sha" GATE_LAST="$last_released" GATE_RECORD_DIR="$record_dir" "$root/$conf_release" "$@" || rc=$?
   case "$rc" in
@@ -325,16 +333,20 @@ run_release() {
   esac
 }
 
+# The order is the point (finding K20): every check that needs no repository code runs first,
+# and the GitHub credential is dropped before anything of the repository runs (its `./dev check`
+# command, then the release command).
 release_stage2() {
   load_conf
   assert_clean_env
   [ "$1" = "$conf_verb" ] || die "this repository releases with ./dev $conf_verb, not ./dev $1"
   shift
   need_gh_token
-  "$here/dev" check
   gate_all
   gate_descends "$gate_sha"
   gate_guarded_diff "$gate_sha"
+  drop_github_auth
+  "$here/dev" check </dev/null || die "./dev check failed on ${gate_sha:0:12}; nothing was released"
   run_release "$gate_sha" "$@"
 }
 

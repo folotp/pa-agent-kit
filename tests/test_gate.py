@@ -462,5 +462,166 @@ class CleanReRunTest(unittest.TestCase):
         self.assertIn("no GitHub token", result.stderr)
 
 
+# --- The normal release entry point, end to end (Codex C22) -------------------------------------
+
+# Stands in for gh as a real executable, since the strict re-run drops shell functions: `gh api
+# [flags] <path> …` prints the file of that path in $GATE_TEST_FIX (with --paginate also its later
+# pages, <file>.2, <file>.3 …) and logs the call in $GATE_TEST_FIX/order. Filters are ignored: the
+# files hold what the filter would print.
+FAKE_GH = r"""#!/bin/sh
+[ "$1" = api ] || exit 1
+shift
+paginate="" path=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --paginate) paginate=1 ;;
+    --jq | -q) shift ;;
+    -*) ;;
+    *) [ -n "$path" ] || path="$1" ;;
+  esac
+  shift
+done
+echo "gh $path" >>"$GATE_TEST_FIX/order"
+f="$GATE_TEST_FIX/$(printf '%s' "$path" | tr '/?&=' '____')"
+[ -f "$f" ] || exit 1
+cat "$f"
+n=2
+while [ -n "$paginate" ] && [ -f "$f.$n" ]; do cat "$f.$n"; n=$((n + 1)); done
+"""
+
+RELEASE_TOML = """profile = "live-config"
+tools = ["gh"]
+check = "sh check.sh"
+[gate]
+repo = "o/r"
+merger = "pa"
+verb = "deploy"
+release = "release.sh"
+ci = "check-runs"
+checks_app = "github-actions"
+required = ["ci"]
+guarded = ["guarded"]
+keep_env = ["MISE_DATA_DIR", "GATE_TEST_FIX"]
+"""
+
+
+def git_auth_env(token="fake-token"):
+    """The GIT_CONFIG_* entries and GH_TOKEN exactly as gh-token.sh exports them."""
+    out = subprocess.run(
+        ["bash", "-c", f'source "{ROOT}/harness/gh-token.sh"; export_git_auth "$1"; env -0', "-", token],
+        env={"HOME": os.environ["HOME"], "PATH": SYSTEM_PATH}, capture_output=True, check=True,
+    ).stdout.decode()
+    pairs = (item.split("=", 1) for item in out.split("\0") if "=" in item)
+    return {k: v for k, v in pairs if k == "GH_TOKEN" or k.startswith("GIT_CONFIG_")}
+
+
+class ReleaseFixture:
+    """A consumer with the real core, a bare origin, a harmless release command and check, and a
+    fake gh that mise resolves (a fake python install in a private mise data directory, locked, so
+    `mise exec --locked` puts it on PATH and `./dev check` finds it under mise)."""
+
+    def __init__(self, test, toml=RELEASE_TOML):
+        self.dir = Path(tempfile.mkdtemp(prefix="gate-e2e."))
+        test.addCleanup(shutil.rmtree, self.dir, True)
+        self.fix, self.data, self.state = self.dir / "gh", self.dir / "mise-data", self.dir / "mise-state"
+        self.fix.mkdir()
+        fake_bin = self.data / "installs" / "python" / "9.9.9" / "bin"
+        fake_bin.mkdir(parents=True)
+        (fake_bin / "gh").write_text(FAKE_GH)
+        (fake_bin / "gh").chmod(0o755)
+        self.origin, self.work = self.dir / "origin.git", self.dir / "work"
+        git(self.dir, "init", "-q", "--bare", "-b", "main", str(self.origin))
+        git(self.dir, "clone", "-q", str(self.origin), str(self.work))
+        git(self.work, "checkout", "-q", "-b", "main")
+        (self.work / "harness").mkdir()
+        for name in ("gate", "conf.awk", "dev", "gh-token.sh"):
+            shutil.copy2(ROOT / "harness" / name, self.work / "harness" / name)
+        shutil.copy2(ROOT / "dev", self.work / "dev")
+        files = {
+            "harness.toml": toml,
+            "mise.toml": '[tools]\npython = "9.9.9"\n',
+            "mise.lock": 'lockfile_version = 4\n\n[[tools.python]]\nversion = "9.9.9"\nbackend = "core:python"\nspecifiers = ["9.9.9"]\n',
+            ".gitignore": "mise.local.toml\n",
+            "check.sh": 'echo "check GH_TOKEN=${GH_TOKEN:-unset} GIT_CONFIG_COUNT=${GIT_CONFIG_COUNT:-unset}" >>"$GATE_TEST_FIX/order"\n',
+            "release.sh": '#!/bin/sh\necho "release $GATE_SHA GH_TOKEN=${GH_TOKEN:-unset} args=$*" >>"$GATE_TEST_FIX/order"\nexit 0\n',
+            "guarded": "v1\n",
+            "a.txt": "a\n",
+        }
+        for name, text in files.items():
+            (self.work / name).write_text(text)
+        (self.work / "release.sh").chmod(0o755)
+        self.first = self.commit("first")
+        subprocess.run(
+            [next(m for m in MISE_LOCATIONS if os.access(m, os.X_OK)), "trust", str(self.work / "mise.toml")], env={**os.environ, "MISE_STATE_DIR": str(self.state)},
+            capture_output=True, check=True,
+        )
+
+    def commit(self, message):
+        git(self.work, "add", "-A")
+        git(self.work, "commit", "-q", "-m", message)
+        git(self.work, "push", "-q", "origin", "HEAD:main")
+        git(self.work, "fetch", "-q", "origin")
+        return git(self.work, "rev-parse", "HEAD")
+
+    def gh(self, path, text):
+        (self.fix / fix_name(path)).write_text(text)
+
+    def github_ok(self, sha, pr=7, merger="pa"):
+        """GitHub answers for a commit that is green and the merge commit of PR `pr`, by `merger`."""
+        self.gh("repos/o/r/commits/main", sha + "\n")
+        self.gh(f"repos/o/r/commits/{sha}/check-runs?per_page=100", "ci\tgithub-actions\tcompleted\tsuccess\n")
+        self.gh(f"repos/o/r/commits/{sha}/pulls", f"{pr}\n")
+        self.gh(f"repos/o/r/pulls/{pr}", merger + "\n")
+
+    def set_last(self, sha):
+        record = self.work / ".git" / "dev-deploy"
+        record.mkdir(exist_ok=True)
+        (record / "last").write_text(sha + "\n")
+
+    def release(self, *args, **extra):
+        env = {
+            "HOME": os.environ["HOME"], "PATH": SYSTEM_PATH, "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
+            "MISE_STATE_DIR": str(self.state), "MISE_DATA_DIR": str(self.data), "GATE_TEST_FIX": str(self.fix),
+            **git_auth_env(), **extra,
+        }
+        return subprocess.run(
+            [str(self.work / "dev"), "deploy", *args], cwd=self.work, env=env,
+            capture_output=True, text=True, timeout=120, start_new_session=True,
+        )
+
+    def order(self):
+        path = self.fix / "order"
+        return path.read_text().splitlines() if path.exists() else []
+
+
+@unittest.skipUnless(any(os.access(p, os.X_OK) for p in MISE_LOCATIONS), "mise not in a fixed location")
+class EndToEndTest(unittest.TestCase):
+    def setUp(self):
+        self.f = ReleaseFixture(self)
+        self.f.set_last(self.f.first)
+        (self.f.work / "a.txt").write_text("b\n")
+        self.sha = self.f.commit("second")
+        self.f.github_ok(self.sha)
+
+    def test_release_runs_checks_first_and_repository_code_without_token(self):
+        result = self.f.release("--mode", "x")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"released {self.sha[:12]}", result.stdout)
+        order = self.f.order()
+        first_repo_code = next(i for i, line in enumerate(order) if not line.startswith("gh "))
+        self.assertTrue(all(not line.startswith("gh ") for line in order[first_repo_code:]), order)
+        self.assertEqual(order[first_repo_code], "check GH_TOKEN=unset GIT_CONFIG_COUNT=unset")
+        self.assertEqual(order[-1], f"release {self.sha} GH_TOKEN=unset args=--mode x")
+        last = (self.f.work / ".git" / "dev-deploy" / "last").read_text().strip()
+        self.assertEqual(last, self.sha)
+
+    def test_refused_commit_runs_no_repository_code(self):
+        self.f.github_ok(self.sha, merger="folotp-claude[bot]")
+        result = self.f.release()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("not by 'pa'", result.stderr)
+        self.assertFalse(any(not line.startswith("gh ") for line in self.f.order()), self.f.order())
+
+
 if __name__ == "__main__":
     unittest.main()
