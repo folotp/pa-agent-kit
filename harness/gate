@@ -7,7 +7,8 @@
 # command reads the credentials, behind a Keychain prompt).
 # Contract, settings and the refusal cases: docs/harness-core.md, 'Gate wrapper'.
 #
-# Usage, through ./dev:  ./dev gate [<sha>]            read-only, no credential
+# Usage, through ./dev:  ./dev gate [<sha>]            read-only (the bot's read-only token)
+#                        ./dev gate --baseline <sha>   PA's recovery of the last release record
 #                        ./dev <verb> [args…]          verb = apply or deploy (harness.toml)
 # Directly:              harness/gate tree             clean-tree check only, for a release command
 #
@@ -296,18 +297,51 @@ gate_all() {
 }
 
 # --- The record of the last release: <git common dir>/dev-<verb>/, never committed ------------
-# `last` holds one SHA, `log` one line per release attempt. The release command may keep its own
-# state in the same directory (GATE_RECORD_DIR).
+# `last` holds one SHA (the baseline every later release is checked from), `log` one line per
+# release attempt, `lock` exists while a release or a baseline change runs. The release command
+# may keep its own state in the same directory (GATE_RECORD_DIR). PA chose to keep the baseline
+# in the clone (session 24c): a missing or unusable one is refused, and only PA's explicit
+# `./dev gate --baseline <sha>` on the terminal sets it again ('Baseline' in docs/harness-core.md).
 
 record_dir="" last_released=""
+BASELINE_HINT="if you know the last commit released to the target, record it in your terminal with ./dev gate --baseline <sha>"
+
+set_record_dir() {
+  record_dir="$(cd "$(git rev-parse --git-common-dir)" && pwd)/dev-$conf_verb" || die "no git directory"
+}
 
 read_last() {
-  record_dir="$(cd "$(git rev-parse --git-common-dir)" && pwd)/dev-$conf_verb" || die "no git directory"
+  set_record_dir
   last_released=""
   if [ -f "$record_dir/last" ]; then
     last_released="$(head -1 "$record_dir/last")"
-    [[ "$last_released" =~ ^[0-9a-f]{40}$ ]] || die "bad record in $record_dir/last"
+    [[ "$last_released" =~ ^[0-9a-f]{40}$ ]] || die "bad record in $record_dir/last ($BASELINE_HINT)"
   fi
+}
+
+# One release or baseline change at a time per clone: `lock` is a directory (mkdir is atomic)
+# holding the owner's PID, removed on any exit. A lock whose process is gone is taken over.
+lock_held=""
+release_lock() {
+  [ -z "$lock_held" ] || rm -rf "$record_dir/lock"
+  lock_held=""
+}
+take_lock() {
+  local pid
+  set_record_dir
+  mkdir -p "$record_dir"
+  if ! mkdir "$record_dir/lock" 2>/dev/null; then
+    pid="$(cat "$record_dir/lock/pid" 2>/dev/null || true)"
+    if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+      refuse "another release of this clone is running (pid $pid); wait for it to end"
+    fi
+    echo "gate: taking over a lock left by a process that is gone (pid ${pid:-unknown})"
+    rm -rf "$record_dir/lock"
+    mkdir "$record_dir/lock" 2>/dev/null || refuse "another release of this clone started at the same moment"
+  fi
+  lock_held=1
+  trap release_lock EXIT
+  echo "$$" >"$record_dir/lock/pid"
 }
 
 # 5. Every change since the last release came through a PR merged by the merger (finding K21).
@@ -319,9 +353,9 @@ read_last() {
 gate_since_last() {
   local sha="$1" commits c n=0
   read_last
-  [ -n "$last_released" ] || refuse "no last release on record in $record_dir/last (see docs/harness-core.md, 'Baseline')"
+  [ -n "$last_released" ] || refuse "no last release on record in $record_dir/last: $BASELINE_HINT"
   git cat-file -e "$last_released^{commit}" 2>/dev/null ||
-    refuse "the last released commit ${last_released:0:12} is not in this clone (see docs/harness-core.md, 'Baseline')"
+    refuse "the last released commit ${last_released:0:12} is not in this clone (fetch it, or $BASELINE_HINT)"
   git merge-base --is-ancestor "$last_released" "$sha" ||
     refuse "HEAD ${sha:0:12} does not descend from the last released commit ${last_released:0:12}"
   commits="$(git rev-list --first-parent "$last_released..$sha")" || refuse "cannot list the commits since ${last_released:0:12}"
@@ -425,10 +459,18 @@ drop_github_auth() {
   for v in $(compgen -e); do case "$v" in GIT_CONFIG_KEY_* | GIT_CONFIG_VALUE_*) unset "$v" ;; esac; done
 }
 
+# Appends to `log`; with result ok (a release) or baseline (PA's recovery), replaces `last`, but
+# only if it still holds what this run read at its start (written whole, then renamed).
 record() { # sha result
+  local now
   mkdir -p "$record_dir"
-  [ "$2" != ok ] || printf '%s\n' "$1" >"$record_dir/last"
   printf '%s %s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$1" "$2" >>"$record_dir/log"
+  case "$2" in ok | baseline) ;; *) return 0 ;; esac
+  now="$(head -1 "$record_dir/last" 2>/dev/null || true)"
+  [ "$now" = "$last_released" ] ||
+    die "$record_dir/last changed during this run (${now:0:12}); ${1:0:12} was not recorded: check the target, then $BASELINE_HINT"
+  { printf '%s\n' "$1" >"$record_dir/last.new" && mv -f "$record_dir/last.new" "$record_dir/last"; } ||
+    die "cannot write $record_dir/last; ${1:0:12} was not recorded"
 }
 
 # Runs the repository's release command with the commit and the verb's arguments. It gets
@@ -465,6 +507,7 @@ release_stage2() {
   assert_no_mise_env
   need_gh_token
   assert_git_auth
+  take_lock
   gate_all
   gate_since_last "$gate_sha"
   gate_guarded_diff "$gate_sha"
@@ -491,14 +534,43 @@ check_main() {
   echo "gate: OK"
 }
 
+# PA's recovery of a missing or unusable baseline (`./dev gate --baseline <sha>`): the commit must
+# be in this clone and on origin/main; PA sees it and the record it replaces, and types yes on
+# the terminal. Nothing else ever sets `last` except a release. No GitHub token is needed.
+set_baseline() {
+  local sha
+  load_conf
+  sha="$(git rev-parse --verify --quiet "$1^{commit}")" || die "unknown commit: $1 (fetch it first)"
+  git merge-base --is-ancestor "$sha" refs/remotes/origin/main 2>/dev/null ||
+    refuse "${sha:0:12} is not on origin/main: only a commit of main can have been released"
+  need_tty
+  take_lock
+  read_last
+  echo "== Baseline of ./dev $conf_verb in $record_dir/last"
+  echo "   now:  ${last_released:-none}"
+  echo "   new:  $sha"
+  git --no-pager log -1 --format='   %h %ad %s' --date=short "$sha"
+  echo "   Every later release must descend from it, and each change to main after it must be a PR merged by $conf_merger."
+  confirm "Record it as the last commit released to the target (type yes): "
+  record "$sha" baseline
+  echo "gate: baseline recorded: ${sha:0:12}"
+}
+
 main() {
   cd "$root"
   case "${1:-}" in
-    check) shift && check_main "$@" ;;
+    check)
+      if [ "${2:-}" = --baseline ]; then
+        [ "$#" -eq 3 ] || die "usage: ./dev gate --baseline <sha>"
+        set_baseline "$3"
+      else
+        shift && check_main "$@"
+      fi
+      ;;
     tree) [ "$#" -eq 1 ] || die "usage: harness/gate tree" && load_conf && gate_clean_tree ;;
     release) [ "$#" -ge 2 ] || die "usage: ./dev apply|deploy [args…]" && shift && release_stage1 "$@" ;;
     --stage2) [ "$#" -ge 2 ] || die "usage: ./dev apply|deploy [args…]" && shift && release_stage2 "$@" ;;
-    *) die "usage: ./dev gate [<sha>] | ./dev apply|deploy [args…] | harness/gate tree" ;;
+    *) die "usage: ./dev gate [<sha>] | ./dev gate --baseline <sha> | ./dev apply|deploy [args…] | harness/gate tree" ;;
   esac
 }
 

@@ -333,6 +333,57 @@ class RecordTest(GateTestCase):
         self.assertRefused(self.f.run(f"gate_since_last {tip}"), "PR #7 was merged by 'folotp-claude[bot]'")
 
 
+class BaselineTest(GateTestCase):
+    """PA's choice (session 24c): the baseline stays in the clone; a lock serialises releases;
+    only `./dev gate --baseline <sha>`, confirmed on the terminal, sets it outside a release."""
+
+    def setUp(self):
+        super().setUp()
+        self.record = self.f.work / ".git" / "dev-deploy"
+
+    def test_lock_of_a_running_process_is_refused(self):
+        (self.record / "lock").mkdir(parents=True)
+        (self.record / "lock" / "pid").write_text(f"{os.getpid()}\n")
+        self.assertRefused(self.f.run("take_lock"), f"another release of this clone is running (pid {os.getpid()})")
+
+    def test_lock_of_a_gone_process_is_taken_over_and_released_on_exit(self):
+        (self.record / "lock").mkdir(parents=True)
+        (self.record / "lock" / "pid").write_text("999999\n")
+        self.assertPassed(self.f.run("take_lock; [ -d \"$record_dir/lock\" ]"), "taking over a lock")
+        self.assertFalse((self.record / "lock").exists())
+
+    def test_last_changed_during_the_run_is_not_overwritten(self):
+        self.record.mkdir()
+        (self.record / "last").write_text(self.f.sha + "\n")
+        result = self.f.run(f"read_last; echo {'1' * 40} > \"$record_dir/last\"; record {'2' * 40} ok")
+        self.assertRefused(result, "changed during this run")
+        self.assertEqual((self.record / "last").read_text().strip(), "1" * 40)
+
+    def baseline(self, sha, answer):
+        return self.f.run_tty(f"load_conf() {{ :; }}; set_baseline {sha}", answer)
+
+    def test_baseline_needs_yes_and_records(self):
+        rc, out = self.baseline(self.f.sha, b"no")
+        self.assertEqual(rc, 1, out)
+        self.assertFalse((self.record / "last").exists())
+        rc, out = self.baseline(self.f.sha, b"yes")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("baseline recorded", out)
+        self.assertEqual((self.record / "last").read_text().strip(), self.f.sha)
+        self.assertIn(f"{self.f.sha} baseline", (self.record / "log").read_text())
+        self.assertFalse((self.record / "lock").exists())
+
+    def test_baseline_off_main_is_refused(self):
+        git(self.f.work, "checkout", "-q", "-b", "side")
+        (self.f.work / "a.txt").write_text("side\n")
+        git(self.f.work, "commit", "-qam", "side")
+        side = git(self.f.work, "rev-parse", "HEAD")
+        self.assertRefused(self.f.run(f"load_conf() {{ :; }}; set_baseline {side}"), "is not on origin/main")
+
+    def test_baseline_without_terminal_is_refused(self):
+        self.assertRefused(self.f.run(f"load_conf() {{ :; }}; set_baseline {self.f.sha}"), "no terminal to confirm on")
+
+
 class GuardedDiffTest(GateTestCase):
     def setUp(self):
         super().setUp()
@@ -747,6 +798,22 @@ class EndToEndTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("not exactly the ones gh-token.sh sets", result.stderr)
+
+    def test_release_without_baseline_names_the_recovery(self):
+        (self.f.work / ".git" / "dev-deploy" / "last").unlink()
+        result = self.f.release()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("./dev gate --baseline <sha>", result.stderr)
+
+    def test_baseline_verb_reaches_the_gate_and_needs_a_terminal(self):
+        result = subprocess.run(
+            [str(self.f.work / "dev"), "gate", "--baseline", self.sha], cwd=self.f.work, capture_output=True,
+            text=True, timeout=120, start_new_session=True,
+            env={"HOME": os.environ["HOME"], "PATH": SYSTEM_PATH, "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
+                 "MISE_STATE_DIR": str(self.f.state), "MISE_DATA_DIR": str(self.f.data)},
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no terminal to confirm on", result.stderr)
 
     def test_refused_commit_runs_no_repository_code(self):
         self.f.github_ok(self.sha, merger="folotp-claude[bot]")
