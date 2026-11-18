@@ -669,7 +669,9 @@ class ReleaseFixture:
         (self.work / "harness").mkdir()
         for name in ("gate", "conf.awk", "dev", "gh-token.sh"):
             shutil.copy2(ROOT / "harness" / name, self.work / "harness" / name)
+        shutil.copytree(ROOT / "harness" / "githooks", self.work / "harness" / "githooks")
         shutil.copy2(ROOT / "dev", self.work / "dev")
+        git(self.work, "config", "core.hooksPath", "harness/githooks")  # as `./dev setup` leaves it
         files = {
             "harness.toml": toml,
             "mise.toml": '[tools]\npython = "9.9.9"\n',
@@ -690,9 +692,10 @@ class ReleaseFixture:
         )
 
     def commit(self, message):
+        """Stands in for a PR merged on GitHub, so the clone's own hooks do not apply."""
         git(self.work, "add", "-A")
-        git(self.work, "commit", "-q", "-m", message)
-        git(self.work, "push", "-q", "origin", "HEAD:main")
+        git(self.work, "commit", "-q", "--no-verify", "-m", message)
+        git(self.work, "push", "-q", "--no-verify", "origin", "HEAD:main")
         git(self.work, "fetch", "-q", "origin")
         return git(self.work, "rev-parse", "HEAD")
 

@@ -1,0 +1,26 @@
+#!/bin/sh
+# Core git hook (finding K14). `./dev setup` installs it through core.hooksPath = <core>/githooks,
+# and `./dev check` refuses when that is not the active hooks path. Refuses any push to main or
+# master (changes reach main only through a PR that PA merges), runs `./dev check`, then the
+# repository's own `.githooks/pre-push`, with the same arguments and the same ref lines on stdin,
+# when it has an executable one. Bypassable with --no-verify, which the guard denies to agents:
+# a convenience, not a control (GitHub's protection of main is the control where it exists).
+# stdin, one line per ref: <local ref> <local sha> <remote ref> <remote sha>
+refs="$(cat)"
+while read -r _ _ remote_ref _; do
+  case "$remote_ref" in
+    refs/heads/main | refs/heads/master)
+      echo "pre-push: refused: push to ${remote_ref#refs/heads/}; push a branch and open a PR instead." >&2
+      exit 1
+      ;;
+  esac
+done <<EOF
+$refs
+EOF
+root="$(git rev-parse --show-toplevel)" || exit 1
+"$root/dev" check || exit 1
+own="$root/.githooks/pre-push"
+if [ -x "$own" ]; then
+  printf '%s\n' "$refs" | "$own" "$@"
+  exit $?
+fi

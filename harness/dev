@@ -39,10 +39,19 @@ find_mise() {
 mise_bin="$(find_mise)" ||
   die "mise not found (PATH, /opt/homebrew/bin, /usr/local/bin, ~/.local/bin). Install mise, then run ./dev setup. A cloud session ships without mise and installs nothing by itself: see docs/harness-core.md, 'Cloud sessions'."
 
-# `setup` is the only verb that installs anything (auto_install is off in mise.toml).
+# The core's git hooks (pre-commit, pre-push), relative to the work tree so that every worktree
+# uses its own checkout's copy: harness/githooks in the workshop, .harness/githooks in a consumer.
+hooks_path="$(basename "$(dirname "$self")")/githooks"
+
+# `setup` is the only verb that installs anything (auto_install is off in mise.toml): the locked
+# tools, and the git hooks (core.hooksPath, written only when it differs: the agent sandbox cannot
+# write .git/config, so PA runs setup in a terminal).
 if [ "${1:-}" = "setup" ]; then
   [ "$#" -eq 1 ] || die "usage: ./dev setup"
   "$mise_bin" install --locked
+  if [ "$(git config --get core.hooksPath || true)" != "$hooks_path" ]; then
+    git config core.hooksPath "$hooks_path" || die "cannot set core.hooksPath to $hooks_path (run ./dev setup in your own terminal)"
+  fi
   exec "$self" check
 fi
 
@@ -126,6 +135,15 @@ verify_core() {
   [ "$listed" = "$present" ] || die ".harness has files that CHECKSUMS does not list (or lacks listed ones): re-sync the core"
 }
 
+# The active git hooks must be the core's (finding K14): a clone that never ran `./dev setup`, or
+# whose hooks point elsewhere (an old checkout of another repository), is refused with the fix.
+verify_hooks() {
+  local active
+  active="$(git config --get core.hooksPath || true)"
+  [ "$active" = "$hooks_path" ] ||
+    die "git hooks are not the core's (core.hooksPath is '${active:-unset}', not '$hooks_path'): run ./dev setup in your own terminal"
+}
+
 # Printed by check and at the start of ci, so that every log carries the resolved versions.
 print_tools() {
   local t
@@ -142,7 +160,9 @@ case "$cmd" in
     [ "$#" -eq 1 ] || die "usage: ./dev check"
     verify_tools
     verify_core
+    verify_hooks
     print_tools
+    printf '%-12s %s\n' hooks "$hooks_path"
     # The repository's own offline check (harness.toml `check`): it must contact nothing.
     if [ -n "$check_command" ]; then
       bash -c "$check_command" </dev/null || die "check failed: $check_command"

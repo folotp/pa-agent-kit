@@ -116,7 +116,7 @@ class SyncTest(unittest.TestCase):
         (self.consumer / "harness.toml").write_text('profile = "plugin"\ntools = ["python3"]\n[checks]\nnone = "true"\n')
         for name in ("mise.toml", "mise.lock"):
             shutil.copy2(ROOT / name, self.consumer / name)
-        return clean_env(MISE_TRUSTED_CONFIG_PATHS=str(self.consumer))
+        return clean_env(hooks=".harness/githooks", MISE_TRUSTED_CONFIG_PATHS=str(self.consumer))
 
     def test_check_passes_on_a_clean_core_and_detects_every_kind_of_drift(self):
         env = self.synced_consumer_with_dispatcher()

@@ -9,4 +9,5 @@ gh-token.sh
 gh-token.md
 core.files
 bindings/
+githooks/
 templates/
