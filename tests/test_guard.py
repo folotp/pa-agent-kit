@@ -9,6 +9,7 @@ It needs jq on the system PATH, as in a real hook.
 import json
 import os
 import subprocess
+import time
 import unittest
 from pathlib import Path
 
@@ -77,6 +78,18 @@ ALWAYS_DENIED = [
     "gh api -X POST repos/o/r/releases -f tag_name=v1",
     "gh api repos/o/r/releases -f tag_name=v1",
     "gh api --method PATCH repos/o/r/releases/5 -F draft=false",
+    # Codex second read of 24b (C4): inherited flags before the command group.
+    "gh -R owner/repo pr merge 5 --squash",
+    "gh --repo owner/repo pr ready 5",
+    "gh -R owner/repo release create v1 --notes x",
+    "gh -R owner/repo release edit v1 --draft=false",
+    "gh -R owner/repo api -X PUT repos/o/r/pulls/5/merge",
+    # C5: a quoted separator must not cut a command in two; quoted text is not an option.
+    "git -C '/tmp/a;b' push origin HEAD:main",
+    'git -C "/tmp/a|b" push --force origin feat',
+    "gh release create v1 --notes 'Use --draft for previews'",
+    'gh release create v1 --notes "x -d y"',
+    "gh release create v1 --title $'a --draft b'",
 ]
 
 ALWAYS_ALLOWED = [
@@ -112,6 +125,13 @@ ALWAYS_ALLOWED = [
     "gh release upload plugin/v1.0.0 x.zip",
     "gh api repos/o/r/releases",
     "gh api -X POST repos/o/r/releases -F draft=true -f tag_name=v1",
+    # Near misses of the Codex C4 and C5 fixes.
+    "gh -R owner/repo pr view 5",
+    "gh --repo owner/repo release view v1",
+    "gh -R owner/repo release create v1 --draft --notes 'a; b'",
+    "bash -c 'gh release create v1 --draft'",
+    "git commit -m 'fix; see -n'",
+    "git -C '/tmp/a;b' push origin HEAD:refs/heads/feat",
 ]
 
 RELEASES = [
@@ -193,6 +213,28 @@ class GuardTest(unittest.TestCase):
         self.assertAllowed(run_guard("claude", claude("git push origin main", tool="Read")))
         self.assertAllowed(run_guard("codex", claude("*** push origin main", "bypassPermissions", tool="apply_patch")))
         self.assertAllowed(run_guard("antigravity", antigravity("git push origin main", tool="view_file")))
+
+    def test_long_commands_are_judged_well_within_the_hook_timeout(self):
+        # Codex second read of 24b: the bindings give the hook 10 s and a timed-out hook lets the
+        # call through. Before the jq views, 6 KB took 8 s (bash 3.2 ${var//…} is quadratic).
+        message = "lorem ipsum dolor; sit 'amet' " * 6000  # about 180 KB
+        for command, denied in (
+            (f'git commit -m "{message}"', False),
+            (f'git commit -m "{message}"; git push origin main', True),
+            ("git commit -m " + "lorem ipsum dolor sit amet " * 7000, False),
+        ):
+            with self.subTest(length=len(command), denied=denied):
+                start = time.monotonic()
+                result = run_guard("claude", claude(command))
+                self.assertLess(time.monotonic() - start, 5)
+                if denied:
+                    self.assertDenied(result, "pushes to main")
+                else:
+                    self.assertAllowed(result)
+
+    def test_a_command_too_long_to_judge_in_time_denies(self):
+        self.assertDenied(run_guard("claude", claude("ls " + "x" * 200_000)), "too long")
+        self.assertDenied(run_guard("antigravity", antigravity("ls " + "x" * 200_000)), "too long", "antigravity")
 
     def test_fails_closed(self):
         self.assertDenied(run_guard("claude", claude("git status"), path="/nonexistent"), "jq is missing")
