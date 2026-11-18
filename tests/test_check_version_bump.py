@@ -112,6 +112,29 @@ class VersionBumpTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("plugins/beta changed but its version is still 2.0.0", err)
 
+    def test_names_git_would_quote_still_count(self):
+        # Codex C2: git quotes these names without -z, and the quoted path hid the plugin.
+        for name in ("é.md", "tab\there.md", "new\nline.md"):
+            with self.subTest(name=name):
+                git(self.repo, "reset", "-q", "--hard", self.base)
+                self.write(f"plugins/beta/{name}", "x\n")
+                self.commit(f"add {name!r}")
+                code, _, err = self.run_check()
+                self.assertEqual(code, 1)
+                self.assertIn("plugins/beta changed but its version is still 2.0.0", err)
+
+    def test_a_file_moved_between_plugins_counts_for_both(self):
+        # Codex C3: with rename detection only the destination showed, so bumping it was enough.
+        self.write("plugins/alpha/docs/guide.md", "line\n" * 20)
+        self.base = self.commit("alpha guide")
+        git(self.repo, "mv", "plugins/alpha/docs/guide.md", "plugins/beta/guide.md")
+        self.write_manifest("beta", "2.1.0", root=False)
+        self.commit("move the guide to beta, bump beta only")
+        code, _, err = self.run_check()
+        self.assertEqual(code, 1)
+        self.assertIn("plugins/alpha changed but its version is still 1.0.0", err)
+        self.assertNotIn("plugins/beta", err)
+
     def test_unreadable_base_is_an_error(self):
         code, _, err = self.run_check(base="no-such-rev")
         self.assertEqual(code, 2)
