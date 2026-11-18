@@ -4,7 +4,7 @@
 
 **Code owners.** `.github/CODEOWNERS` names PA (`* @folotp`) for every path. It changes nothing until PA turns on 'Require review from Code Owners' (one approval, stale approvals dismissed) in branch protection, planned with the tag ruleset in session 25. Then a PR needs PA's approval, so a bot App, which holds Contents and Pull-requests write, cannot merge its own PR even outside the guard (session 24, K2). Until then, the guard and PA's merge habit are what stop a bot merge.
 
-**Dependabot.** `.github/dependabot.yml` updates the SHA-pinned GitHub Actions only: monthly, one grouped PR, releases at least 7 days old (report 2.8). Its PRs pass the same required check as any other.
+**Dependabot.** `.github/dependabot.yml` updates the SHA-pinned GitHub Actions only: monthly, one grouped PR, releases at least 7 days old (report 2.8). Its PRs pass the same required check as any other. **Pins.** Every `uses:` in `.github/workflows/` names a full 40-character commit SHA (a local `./` action or a `docker://` image digest excepted), because a tag or branch can be moved to other code; `tests/test_workflows.py` (`PinnedActionsTest`) fails `./dev ci` on any other reference, with the version in a trailing comment (`# v7.0.1`) for Dependabot. The repository setting 'Require actions to be pinned to a full-length commit SHA' (Settings, Actions, General; PA sets it) makes GitHub refuse such a job at run time as well.
 
 ## Source map and contracts
 
