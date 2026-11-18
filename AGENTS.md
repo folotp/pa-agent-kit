@@ -28,7 +28,7 @@ Use `./dev ci` for automation changes: it runs the unit tests, the online `scrip
 - Never set `version` in both `plugin.json` and the marketplace entry: `plugin.json` wins silently.
 - Never re-introduce the legacy `commit` field on github sources.
 - Portable plugins are also listed in `.agents/plugins/marketplace.json` for Codex (source local, same relative path); listing one is a manual review.
-- PA pushes `<plugin>/v<version>` on the merge commit of a version bump (tag ruleset: only PA); `release.yml` then drafts the release and attaches the zips (`scripts/release-plugins.py --tag`). Publishing is manual, after assets are attached. See `docs/releases.md`.
+- PA pushes `<plugin>/v<version>` on the merge commit of a version bump (tag ruleset: only PA; `harness/gh-token.sh pa -- python3 scripts/tag-release.py <plugin>`); `release.yml` then drafts the release and attaches the zips (`scripts/release-plugins.py --tag`). Publishing is manual, after assets are attached. See `docs/releases.md`.
 - Do not run the bumper against actual manifests merely to test it: use disposable fixtures or an explicitly authorized pin update.
 
 ### Validation
