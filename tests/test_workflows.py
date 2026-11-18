@@ -139,5 +139,54 @@ class WriteTokenWorkflowTest(unittest.TestCase):
         self.assertLess(steps[-1].index('"specs.lock" ]'), steps[-1].index("push origin"))
 
 
+PINNED = re.compile(r"@[0-9a-f]{40}$")
+DOCKER_DIGEST = re.compile(r"^docker://\S+@sha256:[0-9a-f]{64}$")
+
+
+def unpinned_actions(text):
+    """Return the `uses:` values of a workflow that name no full commit SHA.
+
+    A step's `uses:` is pinned when it ends in `@<40 hex>`; a local action (`./...`) has
+    no remote code to move, and a docker image is pinned by a `sha256` digest. Comments
+    (`# v7.0.1` after the SHA, or a commented-out line) are not part of the value."""
+    found = []
+    for line in text.splitlines():
+        match = re.match(r"^\s*(?:-\s+)?uses:\s*(\S+)", line)
+        if not match:
+            continue
+        value = match.group(1)
+        if value.startswith("./") or PINNED.search(value) or DOCKER_DIGEST.match(value):
+            continue
+        found.append(value)
+    return found
+
+
+class PinnedActionsTest(unittest.TestCase):
+    """Every action is pinned to a full commit SHA: a tag or branch can be moved to other
+    code, and the repository setting 'Require actions to be pinned to a full-length commit SHA'
+    fails such a job at run time. This fails it earlier, in `./dev ci`. Dependabot
+    (`.github/dependabot.yml`) moves the pins."""
+
+    def test_every_workflow_action_is_pinned_to_a_full_sha(self):
+        for path in sorted(WORKFLOWS.glob("*.y*ml")):
+            with self.subTest(workflow=path.name):
+                self.assertEqual(unpinned_actions(path.read_text()), [])
+
+    def test_the_check_tells_a_pin_from_a_movable_reference(self):
+        sha = "3d3c42e5aac5ba805825da76410c181273ba90b1"
+        digest = "a" * 64
+        self.assertEqual(unpinned_actions(f"      - uses: actions/checkout@{sha} # v7.0.1\n"), [])
+        self.assertEqual(unpinned_actions(f"        uses: actions/checkout@{sha}\n"), [])
+        self.assertEqual(unpinned_actions("      - uses: ./.github/actions/local\n"), [])
+        self.assertEqual(unpinned_actions(f"      - uses: docker://alpine@sha256:{digest}\n"), [])
+        self.assertEqual(unpinned_actions("      # - uses: actions/checkout@v4\n"), [])
+        self.assertEqual(unpinned_actions("      - uses: actions/checkout@v4\n"), ["actions/checkout@v4"])
+        self.assertEqual(unpinned_actions("      - uses: actions/checkout@main # latest\n"), ["actions/checkout@main"])
+        self.assertEqual(unpinned_actions("      - uses: docker://alpine:3.20\n"), ["docker://alpine:3.20"])
+        # A short or truncated SHA can be ambiguous or moved by a new object: refused.
+        self.assertEqual(unpinned_actions(f"      - uses: actions/checkout@{sha[:39]}\n"), [f"actions/checkout@{sha[:39]}"])
+        self.assertEqual(unpinned_actions(f"      - uses: actions/checkout@{sha}0\n"), [f"actions/checkout@{sha}0"])
+
+
 if __name__ == "__main__":
     unittest.main()
