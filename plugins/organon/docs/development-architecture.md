@@ -51,7 +51,7 @@ The protected gate unions base/current inventories so removing an entry does not
 | Repository | Workflow and triggers | Required check contexts | Actual gate |
 |---|---|---|---|
 | Organon | `.github/workflows/validate.yml`: PRs and pushes to main | `Checks (ubuntu-latest)`, `Checks (macos-latest)` | Full shared check, then actual dry-run via an exact pa-toolkit commit pin |
-| pa-toolkit | `.github/workflows/release-checks.yml`: PRs and pushes to main | `Release checks (ubuntu-latest)`, `Release checks (macos-latest)` | Portable release and generic branch-guard regression tests |
+| pa-toolkit | Workshop `.github/workflows/validate.yml`, job `plugin-pa-toolkit`: PRs and pushes to main (the standalone `release-checks.yml` no longer exists) | `Marketplace validation` (the workshop's single required context) | The plugin's unit tests: release driver and generic branch-guard regressions |
 | pa-marketplace | `.github/workflows/validate.yml`: PRs, main pushes, explicit dispatch | `Marketplace validation` | Disposable-remote workflow test and online marketplace validator |
 
 Required check names are part of the GitHub protection contract: update settings and names together, never leave a renamed context required forever. Branch protection is configured on GitHub separately from YAML: PRs, strict/up-to-date checks, admin enforcement, no force pushes/deletion, and zero required approving reviews for the solo maintainer. Read-only validation workflows do not publish releases. The separately authorized release workflow triggers marketplace notification only after publication.
