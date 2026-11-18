@@ -269,22 +269,56 @@ class RecordTest(GateTestCase):
         record.mkdir(exist_ok=True)
         (record / "last").write_text(text)
 
+    def change(self, message, pr=None, merger="pa"):
+        """One more commit on main; with `pr`, GitHub calls it the merge commit of that PR."""
+        (self.f.work / "a.txt").write_text(message + "\n")
+        sha = self.f.commit(message)
+        self.f.gh(f"repos/o/r/commits/{sha}/pulls", f"{pr}\n" if pr else "")
+        if pr:
+            self.f.gh(f"repos/o/r/pulls/{pr}", merger + "\n")
+        return sha
+
     def test_bad_record_is_refused(self):
         self.write_last("not-a-sha\n")
-        result = self.f.run(f"gate_descends {self.f.sha}")
+        result = self.f.run(f"gate_since_last {self.f.sha}")
         self.assertEqual(result.returncode, 1)
         self.assertIn("bad record", result.stderr)
 
-    def test_descendant_passes(self):
+    def test_no_record_is_refused(self):
+        self.assertRefused(self.f.run(f"gate_since_last {self.f.sha}"), "no last release on record")
+
+    def test_record_not_in_this_clone_is_refused(self):
+        self.write_last("1" * 40 + "\n")
+        self.assertRefused(self.f.run(f"gate_since_last {self.f.sha}"), "is not in this clone")
+
+    def test_merges_by_the_merger_pass(self):
         self.write_last(self.f.sha + "\n")
-        (self.f.work / "a.txt").write_text("b\n")
-        self.assertPassed(self.f.run(f"gate_descends {self.f.commit('second')}"), "descends from the last released")
+        self.change("b", pr=7)
+        tip = self.change("c", pr=8)
+        self.assertPassed(self.f.run(f"gate_since_last {tip}"), "2 change(s) to main since the last release")
+
+    def test_rerelease_of_the_last_commit_passes(self):
+        self.write_last(self.f.sha + "\n")
+        self.assertPassed(self.f.run(f"gate_since_last {self.f.sha}"), "0 change(s)")
 
     def test_going_back_is_refused(self):
         old = self.f.sha
-        (self.f.work / "a.txt").write_text("b\n")
-        self.write_last(self.f.commit("second") + "\n")
-        self.assertRefused(self.f.run(f"gate_descends {old}"), "does not descend from the last released commit")
+        self.write_last(self.change("b", pr=7) + "\n")
+        self.assertRefused(self.f.run(f"gate_since_last {old}"), "does not descend from the last released commit")
+
+    def test_direct_push_between_two_merges_is_refused(self):
+        """K21: a bot pushes to main directly; PA's next, unrelated merge puts it in the tip's history."""
+        self.write_last(self.change("b", pr=7) + "\n")
+        pushed = self.change("direct push")
+        tip = self.change("c", pr=8)
+        result = self.f.run(f"gate_since_last {tip}")
+        self.assertRefused(result, f"{pushed[:12]} is not the merge commit of a PR into main")
+
+    def test_merge_by_someone_else_in_between_is_refused(self):
+        self.write_last(self.f.sha + "\n")
+        self.change("b", pr=7, merger="folotp-claude[bot]")
+        tip = self.change("c", pr=8)
+        self.assertRefused(self.f.run(f"gate_since_last {tip}"), "PR #7 was merged by 'folotp-claude[bot]'")
 
 
 class GuardedDiffTest(GateTestCase):

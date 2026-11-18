@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # gate: the release gate of the harness core, shared by every repository that changes a live
 # system. A commit is released only when the tree is clean, HEAD is the tip of main on GitHub, CI
-# is green for that exact commit, its PR was merged by PA, it descends from the last released
-# commit, and PA confirmed any change to the guarded files since then. Only then does the
-# repository's own release command run (it reads the credentials, behind a Keychain prompt).
+# is green for that exact commit, it descends from the last released commit and every change to
+# main since then is a PR merged by PA, and PA confirmed any change to the guarded files since
+# then. Only then does the repository's own check, then its release command, run (the release
+# command reads the credentials, behind a Keychain prompt).
 # Contract, settings and the refusal cases: docs/harness-core.md, 'Gate wrapper'.
 #
 # Usage, through ./dev:  ./dev gate [<sha>]            read-only, no credential
@@ -245,15 +246,27 @@ read_last() {
   fi
 }
 
-# 5. No going back: when this clone has the last released commit, HEAD must descend from it.
-gate_descends() {
-  local sha="$1"
+# 5. Every change since the last release came through a PR merged by the merger (finding K21).
+# HEAD descends from the last released commit, and each first-parent commit after it (each step
+# by which main moved; squash merging makes it one commit per PR) is the merge commit of exactly
+# one PR into main, merged by the merger. So a direct push to main is refused even when a later,
+# unrelated merge by the merger put it in HEAD's history. Without a usable last release there is
+# nothing to count from, and the gate refuses ('Baseline' in docs/harness-core.md).
+gate_since_last() {
+  local sha="$1" commits c n=0
   read_last
-  if [ -n "$last_released" ] && git cat-file -e "$last_released^{commit}" 2>/dev/null; then
-    git merge-base --is-ancestor "$last_released" "$sha" ||
-      refuse "HEAD ${sha:0:12} does not descend from the last released commit ${last_released:0:12}"
-    echo "gate: HEAD descends from the last released commit (${last_released:0:12})"
-  fi
+  [ -n "$last_released" ] || refuse "no last release on record in $record_dir/last (see docs/harness-core.md, 'Baseline')"
+  git cat-file -e "$last_released^{commit}" 2>/dev/null ||
+    refuse "the last released commit ${last_released:0:12} is not in this clone (see docs/harness-core.md, 'Baseline')"
+  git merge-base --is-ancestor "$last_released" "$sha" ||
+    refuse "HEAD ${sha:0:12} does not descend from the last released commit ${last_released:0:12}"
+  commits="$(git rev-list --first-parent "$last_released..$sha")" || refuse "cannot list the commits since ${last_released:0:12}"
+  for c in $commits; do
+    n=$((n + 1))
+    # The tip itself was checked with CI (gate_all).
+    [ "$c" = "$sha" ] || gate_merged_by "$c"
+  done
+  echo "gate: $n change(s) to main since the last release (${last_released:0:12}), each a PR merged by $conf_merger"
 }
 
 # PA confirms on the terminal only (/dev/tty), never on stdin. A convenience, not a boundary: a
@@ -343,21 +356,22 @@ release_stage2() {
   shift
   need_gh_token
   gate_all
-  gate_descends "$gate_sha"
+  gate_since_last "$gate_sha"
   gate_guarded_diff "$gate_sha"
   drop_github_auth
   "$here/dev" check </dev/null || die "./dev check failed on ${gate_sha:0:12}; nothing was released"
   run_release "$gate_sha" "$@"
 }
 
-# Read-only. No argument: the checks on HEAD and the descent. With a commit: CI and merged-by.
+# Read-only. No argument: the checks on HEAD and every change since the last release. With a
+# commit: CI and merged-by for that commit.
 check_main() {
   local sha
   load_conf
   need_gh_token
   if [ "$#" -eq 0 ]; then
     gate_all
-    gate_descends "$gate_sha"
+    gate_since_last "$gate_sha"
   else
     [ "$#" -eq 1 ] || die "usage: ./dev gate [<sha>]"
     sha="$(git rev-parse --verify --quiet "$1^{commit}")" || die "unknown commit: $1"
