@@ -371,16 +371,35 @@ class BaselineTest(GateTestCase):
         super().setUp()
         self.record = self.f.work / ".git" / "dev-deploy"
 
-    def test_lock_of_a_running_process_is_refused(self):
-        (self.record / "lock").mkdir(parents=True)
-        (self.record / "lock" / "pid").write_text(f"{os.getpid()}\n")
+    def lock_to(self, target):
+        self.record.mkdir(parents=True, exist_ok=True)
+        (self.record / "lock").symlink_to(target)
+
+    def test_lock_carries_its_owner_from_the_moment_it_exists(self):
+        """Codex review of #102: no window in which a live lock has no PID to check."""
+        result = self.f.run('take_lock; [ "$(readlink "$record_dir/lock")" = "$$" ] && echo OWNED')
+        self.assertPassed(result, "OWNED")
+        self.assertFalse(os.path.lexists(self.record / "lock"), "released on exit")
+
+    def test_lock_of_a_running_process_is_refused_and_kept(self):
+        self.lock_to(str(os.getpid()))
         self.assertRefused(self.f.run("take_lock"), f"another release of this clone is running (pid {os.getpid()})")
+        self.assertEqual(os.readlink(self.record / "lock"), str(os.getpid()), "a refused run leaves the owner's lock")
 
     def test_lock_of_a_gone_process_is_taken_over_and_released_on_exit(self):
+        self.lock_to("999999")
+        self.assertPassed(self.f.run('take_lock; [ "$(readlink "$record_dir/lock")" = "$$" ]'), "taking over a lock")
+        self.assertFalse(os.path.lexists(self.record / "lock"))
+
+    def test_lock_that_is_not_a_pid_link_is_refused_not_removed(self):
         (self.record / "lock").mkdir(parents=True)
-        (self.record / "lock" / "pid").write_text("999999\n")
-        self.assertPassed(self.f.run("take_lock; [ -d \"$record_dir/lock\" ]"), "taking over a lock")
-        self.assertFalse((self.record / "lock").exists())
+        self.assertRefused(self.f.run("take_lock"), "is not a lock of this gate")
+        self.assertTrue((self.record / "lock").is_dir())
+
+    def test_a_run_never_removes_a_lock_it_does_not_own(self):
+        self.lock_to(str(os.getpid()))
+        self.assertPassed(self.f.run("set_record_dir; lock_held=1; release_lock"))
+        self.assertEqual(os.readlink(self.record / "lock"), str(os.getpid()))
 
     def test_last_changed_during_the_run_is_not_overwritten(self):
         self.record.mkdir()
@@ -401,7 +420,17 @@ class BaselineTest(GateTestCase):
         self.assertIn("baseline recorded", out)
         self.assertEqual((self.record / "last").read_text().strip(), self.f.sha)
         self.assertIn(f"{self.f.sha} baseline", (self.record / "log").read_text())
-        self.assertFalse((self.record / "lock").exists())
+        self.assertFalse(os.path.lexists(self.record / "lock"))
+
+    def test_baseline_replaces_a_malformed_record(self):
+        """Codex review of #102: the recovery the refusal names must work on that refusal's cause."""
+        self.record.mkdir()
+        (self.record / "last").write_text("not-a-sha\n")
+        self.assertRefused(self.f.run(f"gate_since_last {self.f.sha}"), "--baseline <sha>")
+        rc, out = self.baseline(self.f.sha, b"yes")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("now:  malformed (not?a?sha)", out)
+        self.assertEqual((self.record / "last").read_text().strip(), self.f.sha)
 
     def test_baseline_off_main_is_refused(self):
         git(self.f.work, "checkout", "-q", "-b", "side")

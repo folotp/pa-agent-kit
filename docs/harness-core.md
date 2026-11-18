@@ -185,9 +185,9 @@ Every network call (the fetch, each GitHub read) runs under a 60-second deadline
 The record of the last release, `<git common dir>/dev-<verb>/last`, is the baseline from which check 5 counts. PA chose (session 24c, finding K23) to keep it in the clone rather than at the target:
 
 - A missing record, a malformed one, or one whose commit is not in the clone is refused. Nothing falls back to recent history.
-- The only way to set it outside a release is `./dev gate --baseline <sha>` in PA's terminal: the commit must be in the clone and on `origin/main`; the gate shows it and the record it replaces, and PA types `yes`. It is logged in `log` as `baseline`.
+- The only way to set it outside a release is `./dev gate --baseline <sha>` in PA's terminal: the commit must be in the clone and on `origin/main`; the gate shows it and the record it replaces (read as it is, so a malformed record can be replaced: it is the refusal's own way out), and PA types `yes`. It is logged in `log` as `baseline`.
 - A release writes it only after the release command succeeds, and only if it still holds what the run read at its start (written whole, then renamed).
-- A `lock` directory in the record directory, holding the owner's PID, serialises releases and baseline changes in one clone; a lock whose process is gone is taken over.
+- A `lock` in the record directory serialises releases and baseline changes in one clone. It is a symbolic link whose target is the owner's PID, created with `ln -s`, so the lock and its owner appear in one atomic step and a second run never sees a live lock without a PID (Codex review of #102). A lock whose process is gone is taken over; anything else at that path (a directory, a link that is not a PID) is refused and left alone; each run removes only its own lock. Two runs taking over the same stale lock at the same instant remain a narrow race.
 
 When a live repository moves to the core (sessions 26 and 27), its record directory keeps its name, so the existing `last` carries over. A fresh clone has none: PA records the commit the target runs (the host's `HEAD` for `ha-config`, the last apply for `network-config`) with `--baseline`.
 

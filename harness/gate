@@ -354,29 +354,41 @@ read_last() {
   fi
 }
 
-# One release or baseline change at a time per clone: `lock` is a directory (mkdir is atomic)
-# holding the owner's PID, removed on any exit. A lock whose process is gone is taken over.
+# One release or baseline change at a time per clone. `lock` is a symbolic link whose target is
+# the owner's PID: `ln -s` creates it and publishes the owner in one atomic step, so there is no
+# moment when a live lock has no owner to check (Codex review of #102). A lock whose process is
+# gone is taken over; one that is not a PID link is refused, never removed. Each run removes only
+# its own lock, on any exit.
 lock_held=""
 release_lock() {
-  [ -z "$lock_held" ] || rm -rf "$record_dir/lock"
+  if [ -n "$lock_held" ] && [ "$(readlink "$record_dir/lock" 2>/dev/null || true)" = "$$" ]; then
+    rm -f "$record_dir/lock"
+  fi
   lock_held=""
 }
 take_lock() {
   local pid
   set_record_dir
   mkdir -p "$record_dir"
-  if ! mkdir "$record_dir/lock" 2>/dev/null; then
-    pid="$(cat "$record_dir/lock/pid" 2>/dev/null || true)"
-    if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+  # ln -s into an existing directory would create the link inside it and succeed; the gate
+  # never makes a directory there, so one is foreign.
+  if [ -d "$record_dir/lock" ] && [ ! -L "$record_dir/lock" ]; then
+    refuse "$record_dir/lock is not a lock of this gate; if no release is running, remove it: rm -rf '$record_dir/lock'"
+  fi
+  if ! ln -s "$$" "$record_dir/lock" 2>/dev/null; then
+    pid="$(readlink "$record_dir/lock" 2>/dev/null || true)"
+    [[ "$pid" =~ ^[0-9]+$ ]] ||
+      refuse "$record_dir/lock is not a lock of this gate; if no release is running, remove it: rm -rf '$record_dir/lock'"
+    if kill -0 "$pid" 2>/dev/null; then
       refuse "another release of this clone is running (pid $pid); wait for it to end"
     fi
-    echo "gate: taking over a lock left by a process that is gone (pid ${pid:-unknown})"
-    rm -rf "$record_dir/lock"
-    mkdir "$record_dir/lock" 2>/dev/null || refuse "another release of this clone started at the same moment"
+    echo "gate: taking over a lock left by a process that is gone (pid $pid)"
+    # Remove it only if it is still that stale lock, then claim it the same atomic way.
+    if [ "$(readlink "$record_dir/lock" 2>/dev/null || true)" = "$pid" ]; then rm -f "$record_dir/lock"; fi
+    ln -s "$$" "$record_dir/lock" 2>/dev/null || refuse "another release of this clone started at the same moment"
   fi
   lock_held=1
   trap release_lock EXIT
-  echo "$$" >"$record_dir/lock/pid"
 }
 
 # 5. Every change since the last release came through a PR merged by the merger (finding K21).
@@ -580,9 +592,18 @@ set_baseline() {
     refuse "${sha:0:12} is not on origin/main: only a commit of main can have been released"
   need_tty
   take_lock
-  read_last
+  # The record is read as it is, unvalidated: this is the way out of a malformed one (Codex
+  # review of #102). record() then replaces it only if it is still these exact bytes.
+  set_record_dir
+  last_released="$(head -1 "$record_dir/last" 2>/dev/null || true)"
   echo "== Baseline of ./dev $conf_verb in $record_dir/last"
-  echo "   now:  ${last_released:-none}"
+  if [ -z "$last_released" ]; then
+    echo "   now:  none"
+  elif [[ "$last_released" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "   now:  $last_released"
+  else
+    echo "   now:  malformed ($(printf '%s' "$last_released" | head -c 60 | LC_ALL=C tr -c '[:alnum:]' '?'))"
+  fi
   echo "   new:  $sha"
   git --no-pager log -1 --format='   %h %ad %s' --date=short "$sha"
   echo "   Every later release must descend from it, and each change to main after it must be a PR merged by $conf_merger."
