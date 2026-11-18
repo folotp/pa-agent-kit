@@ -1,68 +1,67 @@
 name: Release
-# Merging a plugin version bump is the release: tag <plugin>/v<version> and
-# open a DRAFT release. Publishing stays manual, after assets are attached
-# (release immutability makes a published release permanent).
+# A release is two steps (session 25). PA tags the merge commit of a version bump,
+# `<plugin>/v<version>`, with PA's own token: the tag ruleset lets only PA create `*/v*` tags,
+# and the GitHub Actions App cannot be a bypass actor on a personal repository. Pushing that
+# tag runs the `release` job, which opens a DRAFT release on it and attaches the zips.
+# Publishing stays manual, after the assets are checked (release immutability makes a
+# published release and its tag permanent). docs/releases.md has the routine.
 on:
   push:
-    branches: [main]
-    paths:
-      - 'plugins/**'
-      - '.claude-plugin/marketplace.json'
+    tags: ['*/v*']
   workflow_dispatch:
     inputs:
       base:
-        description: Commit before the change (releases the plugins whose version differs from it)
+        description: Commit before the change; lists the tags PA would push for the plugins whose version differs from it
         required: true
-      dry_run:
-        description: Print the plan; create no tag and no release
-        type: boolean
-        default: true
 
 permissions:
-  contents: write
+  contents: read
 
-# One release run at a time: two runs must not tag the same version.
+# One release run at a time.
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  release:
-    # From main only, previews included (Codex C1 on session 24b): the job holds a contents-write
-    # token and runs the checked-out scripts/release-plugins.py, so a dispatch from another branch
-    # would run that branch's unmerged code with the token, whatever dry_run says. Preview a
-    # branch locally instead (docs/releases.md).
-    if: github.ref == 'refs/heads/main'
+  # Preview only: no token with write access, nothing created.
+  preview:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: Tag changed plugin versions
+      - name: List the tags a change calls for
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BASE: ${{ github.event_name == 'push' && github.event.before || inputs.base }}
-          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
-        # Refusals before the script runs (session 24, K8; Codex C1), in both modes. A base that
-        # is not a commit would make every plugin look changed (all zeros is a push with no
-        # previous commit, which the script reads as "release nothing"). The ref and the commit
-        # must be main's, checked again here beside the job's `if:`.
+          BASE: ${{ inputs.base }}
         run: |
           set -euo pipefail
           if [ "$BASE" != 0000000000000000000000000000000000000000 ] && ! git rev-parse --verify --quiet "$BASE^{commit}" >/dev/null; then
             echo "::error::base '$BASE' does not resolve to a commit"
             exit 1
           fi
-          if ! [ "$GITHUB_REF" = refs/heads/main ]; then
-            echo "::error::the release job runs from main only (ref: $GITHUB_REF); preview a branch locally"
-            exit 1
-          fi
+          python3 scripts/release-plugins.py --base "$BASE" --head "$GITHUB_SHA"
+
+  # The write token exists only here, and only for a pushed tag. The tag's commit must be on
+  # main: the job runs the checked-out scripts/release-plugins.py with that token, so a tag on
+  # an unmerged commit would run unreviewed code with it (Codex C1 of session 24b).
+  release:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Draft the release of the pushed tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
             echo "::error::$GITHUB_SHA is not on origin/main: nothing runs"
             exit 1
           fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          args=(--base "$BASE" --head "$GITHUB_SHA")
-          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
-          python3 scripts/release-plugins.py "${args[@]}"
+          python3 scripts/release-plugins.py --tag "$TAG" --head "$GITHUB_SHA"
