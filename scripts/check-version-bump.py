@@ -39,8 +39,17 @@ version_at = release_plugins.version_at
 
 
 def changed_plugins(repo: Path, merge_base: str, head: str) -> list[str]:
-    """Return the `plugins/<name>` directories with a changed file, sorted."""
-    names = git("diff", "--name-only", merge_base, head, "--", "plugins/", repo=repo).splitlines()
+    """Return the `plugins/<name>` directories with a changed file, sorted.
+
+    `-z` gives raw, NUL-separated paths: without it git quotes a name holding a non-ASCII
+    character, a tab or a newline (`"plugins/a/\\303\\251.md"`), and the plugin directory would
+    read as `"plugins/a`, which has no manifest, so the plugin would pass unbumped (Codex C2).
+    `--no-renames` lists a moved file under both its old and its new path: with rename
+    detection only the new path shows, and a file moved out of a plugin would not count as a
+    change to it (Codex C3).
+    """
+    out = git("diff", "--name-only", "--no-renames", "-z", merge_base, head, "--", "plugins/", repo=repo)
+    names = [name for name in out.split("\0") if name]
     return sorted({"/".join(name.split("/")[:2]) for name in names if name.count("/") >= 2})
 
 

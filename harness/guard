@@ -18,9 +18,11 @@
 #
 # Early warning, not the boundary: an agent with a shell can edit this file or its bindings. The
 # boundary is the credentials PA releases (report 2.3). It fails closed: no jq, a payload it
-# cannot read (a command that is not a string included) or an unknown agent denies the call.
-# Uses bash 3.2 builtins and jq only (macOS /bin/bash).
+# cannot read (a command that is not a string included), a command too long to judge in time or
+# an unknown agent denies the call. Uses bash 3.2 builtins and jq only (macOS /bin/bash), and
+# writes no temporary file.
 set -uo pipefail
+LC_ALL=C
 
 agent="${1:-}"
 
@@ -61,17 +63,71 @@ cmd="$(printf '%s' "$payload" | jq -r "$cmd_path"' | if . == null then "" elif t
   deny "cannot read the hook payload: the command is not a string"
 [ -n "$cmd" ] || exit 0
 
-# Normalise the text into the words the shell would see: join a line continued by a trailing
-# backslash, then drop $'…' and $"…" markers, quotes and backslash escapes, so that
-# `"git" push origin 'main'`, `\git push …` and `HEAD:ma""in` read as plain words. A quoted ; & |
-# becomes a separator, which can only add a denial.
-bs="\\"
-continued="$bs"$'\n'
-norm="${cmd//"$continued"/}"
-norm="${norm//"\$'"/}"
-norm="${norm//"\$\""/}"
-norm="${norm//[\"\']/}"
-norm="${norm//"$bs"/}"
+# A hook that runs past its timeout lets the call through in the agents, so a command too long to
+# judge quickly denies instead (session 24b: about 0.3 s per 50 KB here; the bindings allow 10 s).
+[ "${#cmd}" -le 200000 ] || deny "the command is too long for the guard to judge in time: split it"
+
+# The command is judged in two views; a denial in either denies. jq builds both, one character at
+# a time with foreach, which is linear. Measured in session 24b: bash 3.2's ${var//…} is
+# quadratic (8 s for 6 KB in a UTF-8 locale) and so are jq's regex functions on a long string
+# (gsub, scan, splits: 31 s for 190 KB), either of which runs past the hook timeout.
+#
+# View 1, flat: a line continued by a trailing backslash is joined, $'…' and $"…" markers, quotes
+# and backslashes are dropped, and every ; & | starts a new simple command. `"git" push origin
+# 'main'`, `\git push …` and `HEAD:ma""in` read as plain words, and a quoted command
+# (`bash -c '…'`) is judged as code.
+#
+# View 2, quote-aware (Codex C5): only an unquoted ; & | or newline starts a new simple command,
+# quotes are dropped, and the blanks inside a quoted or escaped argument become \001, so the
+# argument stays one word. A quoted separator then does not cut a command in two
+# (`git -C '/tmp/a;b' push origin HEAD:main`), and text inside an argument is not an option
+# (`--notes 'use --draft'` is no draft flag). Escapes are not decoded: `$'\x6d'` stays as written.
+#
+# Only the simple commands that could match a rule are passed on (they name git, gh, dev, gate or
+# a PullRequest mutation); a final \002 line proves that jq ran to the end. Characters are code
+# points: 9-13 and 32 blanks, 10 newline, 34 ", 36 $, 39 single quote, 59 ;, 38 &, 92 \, 124 |.
+# shellcheck disable=SC2016 # jq program, not shell
+views='
+def blank: . == 32 or . == 9 or . == 10 or . == 11 or . == 12 or . == 13;
+def flat:
+  [foreach (explode[], null) as $c ({bs: false, dol: false, emit: []};
+     if $c == null then .emit = (if .dol then [36] else [] end)
+     elif .bs and $c == 10 then .bs = false | .dol = false | .emit = []
+     else
+       (if .dol and $c != 39 and $c != 34 then [36] else [] end) as $pre
+       | .bs = ($c == 92)
+       | .dol = ($c == 36)
+       | .emit = $pre + (if $c == 36 or $c == 34 or $c == 39 or $c == 92 then []
+                         elif $c == 59 or $c == 38 or $c == 124 then [10]
+                         else [$c] end)
+     end;
+     .emit[])] | implode;
+def quoted:
+  [foreach (explode[], null) as $c ({q: "", esc: false, dol: false, emit: []};
+     if $c == null then .emit = (if .dol then [36] else [] end)
+     elif .esc then .esc = false | .emit = (if $c == 10 then [] elif ($c | blank) then [1] else [$c] end)
+     elif .dol and $c == 39 then .dol = false | .q = "a" | .emit = []
+     elif .dol and $c == 34 then .dol = false | .q = "d" | .emit = []
+     else
+       (if .dol then [36] else [] end) as $pre
+       | .dol = false
+       | if .q == "" then
+           if $c == 92 then .esc = true | .emit = $pre
+           elif $c == 39 then .q = "s" | .emit = $pre
+           elif $c == 34 then .q = "d" | .emit = $pre
+           elif $c == 36 then .dol = true | .emit = $pre
+           elif $c == 59 or $c == 38 or $c == 124 or $c == 10 then .emit = $pre + [10]
+           else .emit = $pre + [$c] end
+         elif .q == "s" then
+           if $c == 39 then .q = "" | .emit = [] elif ($c | blank) then .emit = [1] else .emit = [$c] end
+         else
+           if $c == 92 then .esc = true | .emit = []
+           elif ($c == 39 and .q == "a") or ($c == 34 and .q == "d") then .q = "" | .emit = []
+           elif ($c | blank) then .emit = [1] else .emit = [$c] end
+         end
+     end;
+     .emit[])] | implode;
+((flat, quoted) | split("\n")[] | select(test("git|gh|dev|gate|PullRequest"))), ([2] | implode)'
 
 # Where can a prompt be answered? Claude Code documents CLAUDE_CODE_REMOTE=true in cloud
 # sessions. Session 12 measured that an `ask` rule did not prompt in bypass mode; dontAsk refuses
@@ -92,23 +148,16 @@ end="([[:space:];&|)]|$)"
 
 # The release verbs, through a path, a wrapper or `mise exec`, and the gate's own release entry
 # points.
-if [ -n "$unattended" ]; then
-  release_re="${sep}dev[[:space:]]+(apply|deploy)${end}"
-  gate_re="${sep}gate[[:space:]]+(release|--stage2)${end}"
-  if [[ "$norm" =~ $release_re ]] || [[ "$norm" =~ $gate_re ]]; then
-    deny "the release verbs are not available in $unattended: run ./dev apply or ./dev deploy in your own terminal"
-  fi
-fi
-
-# The GraphQL mutations that merge a PR, mark it ready or set it to merge itself, anywhere in the
-# command (gh api graphql, curl, …).
-if [[ "$norm" =~ (mergePullRequest|markPullRequestReadyForReview|enablePullRequestAutoMerge) ]]; then
-  deny "PA merges PRs and marks them ready"
-fi
-
-# `gh <group>`, then flags (each with at most one value), then the verb: matches
-# `gh pr -R o/r merge 5`, not `gh pr create --title ready to merge`.
+release_re="${sep}dev[[:space:]]+(apply|deploy)${end}"
+gate_re="${sep}gate[[:space:]]+(release|--stage2)${end}"
+# The GraphQL mutations that merge a PR, mark it ready or set it to merge itself (gh api graphql,
+# curl, …).
+mutation_re="(mergePullRequest|markPullRequestReadyForReview|enablePullRequestAutoMerge)"
+# `gh`, flags, the group, flags, the verb (each flag with at most one value): matches
+# `gh pr -R o/r merge 5` and `gh -R o/r pr merge 5` (Codex C4: gh takes inherited flags before the
+# group too), not `gh pr create --title ready to merge`.
 flags="([[:space:]]+-[^[:space:]]*([[:space:]]+[^-[:space:]][^[:space:]]*)?)*"
+gh="${sep}gh${flags}[[:space:]]+"
 
 git_re="${sep}git[[:space:]]"
 push_re="${sep}git[[:space:]]+([^[:space:]]+[[:space:]]+)*push${end}"
@@ -123,24 +172,30 @@ commit_n_re="[[:space:]]-[^-[:space:]mCcFtuS=]*n"
 # -c or --config-env setting an alias (it hides the verb) or core.hooksPath (it skips the hooks);
 # matched without case, as git reads the keys.
 config_re="[[:space:]](-c[[:space:]]*|--config-env[[:space:]=]+)(alias\.|core\.hookspath)"
-merge_re="${sep}gh[[:space:]]+pr${flags}[[:space:]]+(merge|ready)${end}|${sep}gh[[:space:]]+api[[:space:]].*pulls/[0-9]+/merge${end}"
-release_create_re="${sep}gh[[:space:]]+release${flags}[[:space:]]+(create|new)${end}"
-release_edit_re="${sep}gh[[:space:]]+release${flags}[[:space:]]+edit${end}"
-api_release_re="${sep}gh[[:space:]]+api[[:space:]].*releases"
+merge_re="${gh}pr${flags}[[:space:]]+(merge|ready)${end}|${gh}api[[:space:]].*pulls/[0-9]+/merge${end}"
+release_create_re="${gh}release${flags}[[:space:]]+(create|new)${end}"
+release_edit_re="${gh}release${flags}[[:space:]]+edit${end}"
+api_release_re="${gh}api[[:space:]].*releases"
 # Draft flags as gh parses booleans (true: 1 t T true TRUE True; false: 0 f F false FALSE False).
 draft_re="[[:space:]](--draft(=([tT]([rR][uU][eE])?|1))?|-d)${end}"
 undraft_re="draft=([fF]([aA][lL][sS][eE])?|0)${end}"
 # gh api writes with -X/--method POST|PATCH|PUT, or by default as soon as it sends a field.
 api_write_re="[[:space:]](-X|--method)[[:space:]=]*([pP][oO][sS][tT]|[pP][aA][tT][cC][hH]|[pP][uU][tT])|[[:space:]](-f|-F|--field|--raw-field|--input)([[:space:]=]|$)"
 
-# Judged per simple command: split on ; & | and newlines. Split with parameter expansion, not a
-# here-document: bash writes a here-document to a temporary file, and where it cannot (an
-# unwritable TMPDIR, a sandbox) the loop read nothing and every command passed.
-nl=$'\n'
-rest="${norm//[;&|]/$nl}"
-while [ -n "$rest" ]; do
-  part="${rest%%"$nl"*}"
-  if [ "$part" = "$rest" ]; then rest=""; else rest="${rest#*"$nl"}"; fi
+# Read through a process substitution, not a here-document: bash writes a here-document to a
+# temporary file, and where it cannot (an unwritable TMPDIR, a sandbox) the loop read nothing and
+# every command passed (until session 24b). A jq or pipe failure leaves out the \002 line, and
+# the guard denies.
+complete=""
+while IFS= read -r part; do
+  if [ "$part" = $'\002' ]; then
+    complete=1
+    continue
+  fi
+  if [ -n "$unattended" ] && { [[ "$part" =~ $release_re ]] || [[ "$part" =~ $gate_re ]]; }; then
+    deny "the release verbs are not available in $unattended: run ./dev apply or ./dev deploy in your own terminal"
+  fi
+  [[ ! "$part" =~ $mutation_re ]] || deny "PA merges PRs and marks them ready"
   if [[ "$part" =~ $git_re ]]; then
     [[ "$part" != *--no-veri* ]] || deny "--no-verify skips the git hooks"
     shopt -s nocasematch
@@ -167,6 +222,7 @@ while [ -n "$rest" ]; do
   if [[ "$part" =~ $api_release_re ]] && [[ "$part" =~ $api_write_re ]] && [[ "$part" != *draft=true* ]]; then
     deny "releases stay drafts: a release written through gh api needs draft=true, PA publishes them"
   fi
-done
+done < <(printf '%s' "$cmd" | jq -Rrs "$views" 2>/dev/null)
+[ -n "$complete" ] || deny "cannot split the command into simple commands"
 
 exit 0
