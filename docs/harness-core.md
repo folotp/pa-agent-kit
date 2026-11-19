@@ -54,8 +54,10 @@ Rules, from report 2.4:
 
 - `./dev` re-runs itself under `mise exec --locked` before doing anything, so no tool comes from the shell.
 - It finds mise by `PATH`, then in the usual install locations, because hooks and scheduled jobs run with a minimal `PATH`.
-- It fails closed: a missing mise, or a tool resolved outside mise's directories, stops it with one line. There is no fallback to a system version.
+- It fails closed: a missing mise, or a tool resolved outside mise's directories, stops it with one refusal line. There is no fallback to a system version.
 - Nothing is installed in passing: `auto_install` is off in `mise.toml`.
+
+**Output rule (24i, built in session 24h, row I3).** `check`, `ci`, every refusal of `harness/dev` and `harness/gate`, the gate's own ends (a passing `./dev gate`, a release, a dry run, a baseline) and every refusal of `harness/gh-token.sh` end with three lines: `done: <what happened>`, `left for PA: <what, or nothing>`, `next: <one exact step>`, the last a `/dev-` command where one exists (`/dev-run-ci-locally`, `/dev-check-release-readiness`, `/dev-harness-sync`, `/dev-help`), else the exact command (`./dev setup, in PA's own terminal`). Success goes to stdout, a refusal to stderr. Only messages changed; no decision did. `tests/test_dev.py`, `tests/test_gate.py` and `tests/test_gh_token.py` hold them (`OutputRuleTest`, `OwnerModeTest`). The sync's report keeps its form until the next tag.
 
 ## `harness.toml`
 

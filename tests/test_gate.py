@@ -549,6 +549,54 @@ class ReleaseTest(GateTestCase):
         self.assertIn("failed-exit-5", (self.record / "log").read_text())
 
 
+class OutputRuleTest(GateTestCase):
+    """24i's output rule (24g I3): every refusal and every end says what happened, what is left
+    for PA and the one next step, in its last three lines. Only messages changed, never a decision."""
+
+    def setUp(self):
+        super().setUp()
+        script = self.f.dir / "release.sh"
+        script.write_text('#!/bin/sh\nexit "$RC"\n')
+        script.chmod(0o755)
+
+    release = ReleaseTest.release
+
+    def assertEnds(self, text, done, left, next_step):
+        last = text.splitlines()[-3:]
+        self.assertEqual(len(last), 3, text)
+        self.assertTrue(last[0].startswith(f"done: {done}"), last)
+        self.assertTrue(last[1].startswith(f"left for PA: {left}"), last)
+        self.assertIn(next_step, last[2])
+        self.assertTrue(last[2].startswith("next: "), last)
+
+    def test_a_refusal_names_the_read_only_check_by_default(self):
+        (self.f.work / "stray.txt").write_text("x")
+        result = self.f.run("gate_clean_tree")
+        self.assertRefused(result, "working tree not clean")
+        self.assertEnds(result.stderr, "refused; nothing was released or recorded", "nothing, unless",
+                        "/dev-check-release-readiness")
+
+    def test_no_token_names_the_read_only_bot_form(self):
+        result = self.f.run("need_gh_token")
+        self.assertRefused(result, "no GitHub token")
+        self.assertEnds(result.stderr, "refused", "nothing", "gh-token.sh claude --read-only -- ./dev")
+
+    def test_a_missing_baseline_names_pas_baseline_command(self):
+        result = self.f.run(f"gate_since_last {self.f.sha}")
+        self.assertRefused(result, "no last release on record")
+        self.assertEnds(result.stderr, "refused", "record the last commit released", "./dev gate --baseline <sha>")
+
+    def test_a_release_ends_with_its_outcome(self):
+        self.assertEnds(self.release(0).stdout, f"released {self.f.sha[:12]}", "nothing", "/dev-status")
+        self.setUp()
+        self.assertEnds(self.release(3).stdout, f"{self.f.sha[:12]} passed the gate; nothing was released",
+                        "the real release", "in PA's own terminal")
+        self.setUp()
+        failed = self.release(5)
+        self.assertRefused(failed, "the release failed (exit 5)")
+        self.assertEnds(failed.stderr, "refused", "the failed release", "read the release's output above")
+
+
 GOOD_GATE = """
 tools = ["gh"]
 [gate]

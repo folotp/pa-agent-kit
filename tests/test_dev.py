@@ -281,6 +281,46 @@ class CoreChecksTest(unittest.TestCase):
                 self.assertIn("core-checks  ok", result.stdout)
 
 
+class OutputRuleTest(unittest.TestCase):
+    """24i's output rule (24g I3): every verb ends with `done:`, `left for PA:` and `next:`, on
+    success (stdout) and on refusal (stderr), naming a /dev- command or the exact command."""
+
+    TOML = 'profile = "plugin"\ntools = ["python3"]\n[checks]\nfirst = "echo one"\n'
+
+    def last_three(self, text):
+        last = text.splitlines()[-3:]
+        self.assertEqual([line.split(":", 1)[0] for line in last], ["done", "left for PA", "next"], text)
+        return [line.split(": ", 1)[1] for line in last]
+
+    def test_check_and_ci_end_with_the_next_step(self):
+        fixture = FixtureRepo(self, self.TOML)
+        result = run_dev(fixture.dir, "check", env=fixture.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.last_three(result.stdout), ["./dev check passed", "nothing", "commit; ./dev ci before pushing (/dev-run-ci-locally)"])
+        result = run_dev(fixture.dir, "ci", env=fixture.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        done, left, next_step = self.last_three(result.stdout)
+        self.assertEqual((done, left), ("./dev ci passed", "nothing"))
+        self.assertIn("harness/gh-token.sh <bot> -- git push origin HEAD:refs/heads/<branch>", next_step)
+
+    def test_refusals_end_with_the_next_step(self):
+        fixture = FixtureRepo(self, self.TOML)
+        cases = (
+            (("frobnicate",), fixture.env, "/dev-help"),
+            (("check",), clean_env(hooks=None, MISE_TRUSTED_CONFIG_PATHS=str(fixture.dir)), "./dev setup, in PA's own terminal"),
+        )
+        for args, env, expected in cases:
+            with self.subTest(args):
+                result = run_dev(fixture.dir, *args, env=env)
+                self.assertEqual(result.returncode, 1)
+                done, _, next_step = self.last_three(result.stderr)
+                self.assertEqual(done, "refused; nothing changed")
+                self.assertIn(expected, next_step)
+        (fixture.dir / ".codex" / "hooks.json").write_text("{}\n")
+        result = run_dev(fixture.dir, "check", env=fixture.env)
+        self.assertIn("then ./dev check", self.last_three(result.stderr)[2])
+
+
 class HooksTest(unittest.TestCase):
     """The core's git hooks (finding K14), from a fresh clone: `./dev check` names `./dev setup`
     until it ran; setup sets core.hooksPath; pre-commit runs `./dev check`; pre-push refuses main

@@ -37,7 +37,15 @@ app_client_id() {
   esac
 }
 
-die() { printf 'gh-token: %s\n' "$*" >&2; exit 1; }
+# A refusal: the reason, then what happened, what is left for PA and the next step (24i's output
+# rule), on stderr. Nothing was run by the script when it refuses.
+die() {
+  printf 'gh-token: %s\n' "$*" >&2
+  # A failed revocation (revoke_minted) comes after the command ran: its own line says enough.
+  [[ -z ${revoking:-} ]] || exit 1
+  printf 'done: refused; the command did not run\nleft for PA: nothing, unless the line above names a Keychain item or an App setting (gh-token.md)\nnext: fix what the line above names, then re-run the same command\n' >&2
+  exit 1
+}
 
 usage() {
   cat >&2 <<'EOF'
@@ -59,7 +67,7 @@ minted_token=""
 revoke_minted() {
   [[ -n $minted_token ]] || return 0
   # In a subshell: a failed request (api dies) must not replace the command's exit status.
-  (api DELETE /installation/token token "$minted_token" >/dev/null) ||
+  (revoking=1; api DELETE /installation/token token "$minted_token" >/dev/null) ||
     printf 'gh-token: revoke failed; the token expires within the hour\n' >&2
   minted_token=""
 }
@@ -173,7 +181,10 @@ main() {
   case $app in -h|--help) usage ;; esac
 
   # Renamed in session 24h (24g C6), with no alias: one line names the new mode.
-  [[ $app != pa ]] || die "the pa mode is now owner: run gh-token.sh owner -- CMD (Keychain item $OWNER_SERVICE, see gh-token.md)"
+  if [[ $app == pa ]]; then
+    printf 'gh-token: the pa mode is now owner: run gh-token.sh owner -- CMD (Keychain item %s, see gh-token.md)\n' "$OWNER_SERVICE" >&2
+    exit 1
+  fi
   if [[ $app == owner ]]; then
     [[ ${1:-} == -- ]] || die "usage: gh-token.sh owner -- CMD..."
     shift

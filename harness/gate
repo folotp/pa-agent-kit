@@ -21,12 +21,28 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 self="$here/$(basename "${BASH_SOURCE[0]}")"
 root="$(cd "$here/.." && pwd)"
 
+# Every refusal ends with what happened, what is left for PA and the one next step (24i's output
+# rule: `done:`, `left for PA:`, `next:`). The default next step is the read-only check once the
+# line above is fixed; a refusal with a more exact step sets `next_step` (and `left_for_pa`) first.
+# Only the messages changed in session 24h (row I3), never what is refused.
+next_step="fix what the line above names, then /dev-check-release-readiness (./dev gate, read-only)"
+left_for_pa="nothing, unless the line above names a step of PA's (a merge, a baseline, a lock)"
+ending() {
+  # A refusal that asks for PA's baseline (BASELINE_HINT below) names that step.
+  if [ -n "${BASELINE_HINT:-}" ] && [[ "$1" == *"$BASELINE_HINT"* ]]; then
+    next_step="./dev gate --baseline <sha>, in PA's own terminal, then /dev-check-release-readiness"
+    left_for_pa="record the last commit released to the target (./dev gate --baseline <sha>)"
+  fi
+  printf 'done: refused; nothing was released or recorded\nleft for PA: %s\nnext: %s\n' "$left_for_pa" "$next_step" >&2
+}
 die() {
   echo "dev: $*" >&2
+  ending "$*"
   exit 1
 }
 refuse() {
   echo "dev: refused: $*" >&2
+  ending "$*"
   exit 1
 }
 
@@ -235,8 +251,10 @@ EOF
 # stored GitHub login. Without it, refuse at once rather than let git ask for a password. The
 # gate only reads, so the token it is meant to get is the read-only one (--read-only).
 need_gh_token() {
-  [ -n "${GH_TOKEN:-}" ] ||
-    refuse "no GitHub token: run it as $(basename "$here")/gh-token.sh claude --read-only -- ./dev … (the gate only reads GitHub)"
+  [ -n "${GH_TOKEN:-}" ] && return 0
+  next_step="the same command under the read-only bot token: $(basename "$here")/gh-token.sh claude --read-only -- ./dev …"
+  left_for_pa="nothing"
+  refuse "no GitHub token: run it as $(basename "$here")/gh-token.sh claude --read-only -- ./dev … (the gate only reads GitHub)"
 }
 
 # Every network call of the gate (the fetch, each GitHub read) runs under a deadline: one that
@@ -534,10 +552,16 @@ run_release() {
     0)
       record "$sha" ok
       echo "dev: released ${sha:0:12}; recorded in $record_dir/last"
+      printf 'done: released %s\nleft for PA: nothing\nnext: nothing to run; /dev-status shows what waits\n' "${sha:0:12}"
       ;;
-    "$NOTHING_RELEASED") echo "dev: ${sha:0:12} passed; nothing was released or recorded" ;;
+    "$NOTHING_RELEASED")
+      echo "dev: ${sha:0:12} passed; nothing was released or recorded"
+      printf 'done: %s passed the gate; nothing was released (a dry run)\nleft for PA: the real release, if that was the intent\nnext: ./dev %s, in PA'"'"'s own terminal\n' "${sha:0:12}" "$conf_verb"
+      ;;
     *)
       record "$sha" "failed-exit-$rc"
+      next_step="read the release's output above, fix it in a PR, then /dev-check-release-readiness"
+      left_for_pa="the failed release: its output says what the target refused"
       die "the release failed (exit $rc); the last released commit is unchanged"
       ;;
   esac
@@ -579,6 +603,7 @@ check_main() {
     gate_merged_by "$sha"
   fi
   echo "gate: OK"
+  printf 'done: the gate passes on %s (read-only; nothing was released)\nleft for PA: the release, in PA'"'"'s own terminal\nnext: ./dev %s\n' "$(git rev-parse --short=12 "${sha:-HEAD}")" "$conf_verb"
 }
 
 # PA's recovery of a missing or unusable baseline (`./dev gate --baseline <sha>`): the commit must
@@ -610,6 +635,7 @@ set_baseline() {
   confirm "Record it as the last commit released to the target (type yes): "
   record "$sha" baseline
   echo "gate: baseline recorded: ${sha:0:12}"
+  printf 'done: baseline recorded: %s\nleft for PA: nothing\nnext: /dev-check-release-readiness\n' "${sha:0:12}"
 }
 
 main() {
