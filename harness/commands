@@ -220,7 +220,8 @@ first_waiting_command() { printf '%s' "$waiting" | awk -F"$TAB" 'NF { print $2; 
 print_group() { # print_group KEY TITLE [MISSING_LINE]
   local lines
   lines=$(printf '%s' "$unique" | awk -F"$TAB" -v g="$1" '$1 == g {
-      d = $3; if (length(d) > 110) d = substr(d, 1, 107) "..."
+      d = $3; p = index(d, ". "); if (p > 0) d = substr(d, 1, p)  # the first sentence
+      if (length(d) > 110) d = substr(d, 1, 107) "..."
       o = (g == "plugin" || g == "repo" || g == "mac") ? "  (" $6 ")" : ""
       printf "  /%s — %s%s\n", $2, d, o }' | sort)
   printf '%s\n' "$2"
