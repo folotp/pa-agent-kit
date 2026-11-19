@@ -1,6 +1,6 @@
 ---
 name: dev-delete-merged-branches
-description: Deletes local branches whose pull request GitHub shows as merged at the local tip, with their clean worktrees. Use it after a PR is merged, to clean up a squash-merged branch, or whenever a forced branch delete is refused by the guard: it is the sanctioned way, and the only one, to delete a merged branch.
+description: Deletes local git branches, with their worktrees, once GitHub shows their pull request merged, including squash-merged branches that `git branch -d` calls not fully merged. Use this skill whenever the user wants to clean up, prune, remove or delete a local branch or worktree after a merge, has stale merged branches, or had a forced branch delete refused; plain git cannot see a squash merge and the guard refuses a forced delete, so this is the sanctioned way. Not for remote branches, renames or unmerged work.
 metadata:
   audience: agents
 ---

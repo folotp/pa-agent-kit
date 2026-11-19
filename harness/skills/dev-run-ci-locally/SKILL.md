@@ -1,6 +1,6 @@
 ---
 name: dev-run-ci-locally
-description: Runs the repository's checks locally the way CI does: ./dev check before a commit, ./dev ci before a push, and reports what to fix. Use it before every commit and push, when a git hook or CI failed, or when a guard refusal names it after a skipped hook.
+description: Runs this repository's own checks exactly as CI and the git hooks do (`./dev check` before a commit, `./dev ci` before a push) and reports what to fix. Use this skill whenever the user wants changes verified before a commit or push, a red CI job such as Core checks reproduced locally, or a failed pre-commit or pre-push hook (for example core checks failed) explained and fixed; skipping hooks is refused, so this is how to find what they catch. Not for writing tests or editing workflows.
 metadata:
   audience: agents
 ---

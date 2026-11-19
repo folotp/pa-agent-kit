@@ -56,7 +56,7 @@ class CommandsTest(unittest.TestCase):
         self.repo = self.work / "repo"
         core = self.repo / ".harness"
         (core / "skills").mkdir(parents=True)
-        for name in ("commands", "git-prune-merged.sh", "conf.awk"):
+        for name in ("commands", "harness-sync", "git-prune-merged.sh", "conf.awk"):
             shutil.copy2(HARNESS / name, core / name)
         self.write(".harness/skills/dev-help/SKILL.md", skill("dev-help", "Lists every dev- command."))
         self.write(".harness/skills/dev-run-ci-locally/SKILL.md",

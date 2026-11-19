@@ -1,6 +1,6 @@
 ---
 name: dev-read-github-actions-log
-description: Reads the log of a GitHub Actions run or job from the agent sandbox, as the bot, and finds the failing step. Use it whenever a CI check failed on a PR or a workflow run must be inspected, instead of asking PA for a summary.
+description: Reads GitHub Actions logs of a failed check, workflow run or job, as the bot and from inside the agent sandbox (where a plain `gh run view --log` fails), and names the failing step and its error. Use this skill whenever a check is red on a PR, a workflow run failed, CI fails on GitHub but passes locally, or the user asks what an Actions log says, rather than asking PA for a summary. Not for writing, pinning or re-running workflows.
 metadata:
   audience: agents
 ---

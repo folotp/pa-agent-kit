@@ -31,7 +31,6 @@ set -euo pipefail
 
 here_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 core_rel=$(basename "$here_dir") # .harness in a consumer, harness in the workshop
-readonly WORKSHOP_URL="${HARNESS_WORKSHOP_URL:-https://github.com/folotp/pa-agent-kit.git}"
 TAB=$(printf '\t')
 
 ending() { printf 'done: %s\nleft for PA: %s\nnext: %s\n' "$1" "$2" "$3"; }
@@ -197,8 +196,7 @@ collect_waiting() { # collect_waiting ONLINE(0|1)
 
   if [ "$core_rel" = .harness ] && [ -f .harness/VERSION ]; then
     have=$(sed -n 's/^core //p' .harness/VERSION | head -1)
-    latest=$(git ls-remote --tags --refs "$WORKSHOP_URL" 'harness-v*' 2>/dev/null \
-      | sed 's#.*refs/tags/##' | awk -F'[v.]' '{ printf "%d %d %s\n", $(NF-1), $NF, $0 }' | sort -n -k1,1 -k2,2 | tail -1 | cut -d' ' -f3) || true
+    latest=$("$here_dir/harness-sync" --latest 2>/dev/null) || true
     if [ -n "$latest" ] && [ "$latest" != "$have" ]; then
       wait_item "core $latest is out; this repository has ${have:-an unknown version}" "/dev-harness-sync $latest"
     fi
