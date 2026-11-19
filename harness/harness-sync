@@ -4,7 +4,7 @@
 #
 # Usage, from anywhere inside a repository that carries the core, run as the bot so that the push
 # and the PR use its token:
-#   .harness/gh-token.sh <bot> -- .harness/harness-sync [<tag>]
+#   .harness/gh-token.sh <bot> -- .harness/harness-sync [<tag>] [--keep-root <file>]...
 #       <tag> is a core tag `harness-vX.Y` of the workshop; the default is the newest one.
 #   harness-sync --latest
 #       prints the newest `harness-vX.Y` tag of the workshop, or nothing when there is none or the
@@ -42,7 +42,7 @@ refuse() {
   ending "refused; nothing changed" "nothing" "$2" >&2
   exit "${3:-1}"
 }
-usage() { refuse "usage: $core_rel/harness-sync [harness-vX.Y] | --latest" "/dev-harness-sync (the newest core tag)" 2; }
+usage() { refuse "usage: $core_rel/harness-sync [harness-vX.Y] [--keep-root <file>]... | --latest" "/dev-harness-sync (the newest core tag)" 2; }
 
 # The newest harness-vX.Y tag of the workshop, by number (harness-v0.10 is newer than harness-v0.9).
 latest_tag() {
@@ -52,12 +52,22 @@ latest_tag() {
     || true
 }
 
+# Keep the option pairs in "$@" for verbatim forwarding. The tagged installer
+# owns the list of eligible files and checks every explicit preservation choice.
+tag=""
 case "${1:-}" in
   --latest) [ "$#" -eq 1 ] || usage; latest_tag; exit 0 ;;
-  -h|--help) usage ;;
+  --keep-root|"") ;;
   -*) usage ;;
+  *) tag=$1; shift ;;
 esac
-[ "$#" -le 1 ] || usage
+validate_options() {
+  while [ "$#" -gt 0 ]; do
+    [ "$1" = --keep-root ] && [ -n "${2:-}" ] && [[ $2 != -* ]] || usage
+    shift 2
+  done
+}
+validate_options "$@"
 
 top=$(git rev-parse --show-toplevel 2>/dev/null) || refuse "not inside a git repository" "cd into the repository to sync, then /dev-harness-sync"
 cd "$top"
@@ -67,7 +77,6 @@ if [ "$core_rel" = harness ]; then
 fi
 command -v python3 >/dev/null 2>&1 || refuse "python3 is not on PATH (the workshop's sync.py needs it)" "install python3, then /dev-harness-sync"
 
-tag=${1:-}
 if [ -z "$tag" ]; then
   tag=$(latest_tag)
   [ -n "$tag" ] || refuse "no harness-vX.Y tag could be read from $WORKSHOP_URL" "check the network, then /dev-harness-sync"
@@ -106,12 +115,12 @@ git worktree add --quiet --detach "$tmp/checkout" origin/main \
   || refuse "could not check out origin/main into a temporary worktree (line above)" "/dev-harness-sync $tag"
 
 echo "harness-sync: core ${have:-(none)} -> $tag, from origin/main"
-if python3 -B "$tmp/workshop/tools/sync/sync.py" "$tag" "$tmp/checkout" --pr; then
+if python3 -B "$tmp/workshop/tools/sync/sync.py" "$tag" "$tmp/checkout" --pr "$@"; then
   ending "core $tag committed on harness-sync/$tag from origin/main, pushed, PR opened as the bot (link above); this checkout is unchanged" \
     "review and merge the PR once its checks pass, and any step the report above gives PA" \
     "after PA's merge, /dev-update-local-repo"
 else
-  next="fix what the lines above name, then /dev-harness-sync $tag"
+  next="retry /dev-harness-sync $tag after fixing the reported files or naming each one to preserve with --keep-root <file>"
   if git show-ref --verify --quiet "refs/heads/harness-sync/$tag"; then
     next="inspect git show harness-sync/$tag and the error above; resume the push or PR from that branch"
   fi

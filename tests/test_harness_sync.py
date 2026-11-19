@@ -128,6 +128,29 @@ class HarnessSyncTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(self.origin_file("harness-sync/harness-v0.2", ".harness/VERSION").startswith("core harness-v0.2\n"))
 
+    def test_explicitly_keeps_custom_consumer_files_in_the_pr(self):
+        custom = {"CLAUDE.md": "@AGENTS.md\nConsumer notes.\n",
+                  ".claude/settings.json": '{"hooks": {}}\n'}
+        for name, content in custom.items():
+            path = self.consumer / name
+            path.parent.mkdir(exist_ok=True)
+            path.write_text(content)
+        self.git(self.consumer, "add", "-A")
+        self.git(self.consumer, "commit", "-qm", "custom root files")
+        self.git(self.consumer, "push", "-q", "origin", "main")
+
+        refused = self.run_sync("harness-v0.2", "--keep-root", "CLAUDE.md")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn(".claude/settings.json: the core guard hook", refused.stderr)
+        self.assertFalse((self.tmp / "gh.log").exists())
+
+        result = self.run_sync("--keep-root", "CLAUDE.md", "--keep-root", ".claude/settings.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for name, content in custom.items():
+            self.assertEqual(self.origin_file("harness-sync/harness-v0.10", name), content)
+            self.assertIn(f"`{name}` DIFFERS", (self.tmp / "gh.log").read_text())
+        self.assert_no_leftovers()
+
     def test_already_at_the_tag_changes_nothing(self):
         result = self.run_sync("harness-v0.1")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -156,6 +179,8 @@ class HarnessSyncTest(unittest.TestCase):
             (("harness-v7.7",), 1, "could not be fetched"),
             (("v1",), 2, "is not a core tag"),
             (("harness-v0.2", "extra"), 2, "usage:"),
+            (("--keep-root",), 2, "usage:"),
+            (("--latest", "--keep-root", "dev"), 2, "usage:"),
             (("--bogus",), 2, "usage:"),
         ]
         for args, code, reason in cases:
