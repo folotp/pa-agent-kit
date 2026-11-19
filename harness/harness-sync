@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# harness-sync: bring this repository to a newer core, as one PR (24g row I5i; the skill
+# /dev-harness-sync wraps it). Core file.
+#
+# Usage, from anywhere inside a repository that carries the core, run as the bot so that the push
+# and the PR use its token:
+#   .harness/gh-token.sh <bot> -- .harness/harness-sync [<tag>]
+#       <tag> is a core tag `harness-vX.Y` of the workshop; the default is the newest one.
+#   harness-sync --latest
+#       prints the newest `harness-vX.Y` tag of the workshop, or nothing when there is none or the
+#       workshop cannot be read; exit 0 either way. A query for other scripts (`commands next`
+#       names the tag it prints), so it has no done:/next: ending. The one place that chooses
+#       "the newest core tag".
+#
+# What it does, in a consumer:
+#   1. Refuses, changing nothing, when this repository is already at <tag> (.harness/VERSION).
+#   2. Fetches origin and checks out origin/main into a temporary worktree: the sync never
+#      touches this checkout, its branch or its uncommitted files.
+#   3. Clones <tag> of the public workshop (HARNESS_WORKSHOP_URL overrides its URL, for tests)
+#      into the same temporary directory, shallow, and runs that tag's own tools/sync/sync.py on the
+#      temporary worktree with --pr: one commit on branch harness-sync/<tag>, pushed, one PR, its
+#      body holding the sync report (docs/harness-core.md, 'Sync').
+#   4. Removes the temporary directory and worktree, also on failure or Ctrl-C. The local branch
+#      harness-sync/<tag> stays; /dev-delete-merged-branches removes it after PA's merge.
+# In the workshop itself there is nothing to fetch: it refuses and names `./dev sync`, which
+# syncs another checkout from this one.
+#
+# Needs git, python3 (the workshop's sync.py is stdlib only) and, for the PR, gh with a bot token in
+# GH_TOKEN; reads no credential itself. Output: the last three lines follow the core's output rule
+# (done: / left for PA: / next:). Exit 0, 1 when the sync was refused or failed, 2 on a usage error.
+set -euo pipefail
+
+here_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+core_rel=$(basename "$here_dir") # .harness in a consumer, harness in the workshop
+readonly WORKSHOP_URL="${HARNESS_WORKSHOP_URL:-https://github.com/folotp/pa-agent-kit.git}"
+readonly TAG_RE='^harness-v[0-9]+\.[0-9]+$'
+
+ending() { printf 'done: %s\nleft for PA: %s\nnext: %s\n' "$1" "$2" "$3"; }
+# refuse REASON NEXT [EXIT]: a refusal changes nothing.
+refuse() {
+  printf 'harness-sync: %s\n' "$1" >&2
+  ending "refused; nothing changed" "nothing" "$2" >&2
+  exit "${3:-1}"
+}
+usage() { refuse "usage: $core_rel/harness-sync [harness-vX.Y] | --latest" "/dev-harness-sync (the newest core tag)" 2; }
+
+# The newest harness-vX.Y tag of the workshop, by number (harness-v0.10 is newer than harness-v0.9).
+latest_tag() {
+  git ls-remote --tags --refs "$WORKSHOP_URL" 'harness-v*' 2>/dev/null \
+    | sed 's#.*refs/tags/##' | grep -E "$TAG_RE" \
+    | awk -F'[v.]' '{ printf "%d %d %s\n", $(NF-1), $NF, $0 }' | sort -n -k1,1 -k2,2 | tail -1 | cut -d' ' -f3 \
+    || true
+}
+
+case "${1:-}" in
+  --latest) [ "$#" -eq 1 ] || usage; latest_tag; exit 0 ;;
+  -h|--help) usage ;;
+  -*) usage ;;
+esac
+[ "$#" -le 1 ] || usage
+
+top=$(git rev-parse --show-toplevel 2>/dev/null) || refuse "not inside a git repository" "cd into the repository to sync, then /dev-harness-sync"
+cd "$top"
+if [ "$core_rel" = harness ]; then
+  refuse "this is the workshop, the source of the core: it syncs other checkouts" \
+    "harness/gh-token.sh <bot> -- ./dev sync <tag> <consumer-checkout> --pr"
+fi
+command -v python3 >/dev/null 2>&1 || refuse "python3 is not on PATH (the workshop's sync.py needs it)" "install python3, then /dev-harness-sync"
+
+tag=${1:-}
+if [ -z "$tag" ]; then
+  tag=$(latest_tag)
+  [ -n "$tag" ] || refuse "no harness-vX.Y tag could be read from $WORKSHOP_URL" "check the network, then /dev-harness-sync"
+fi
+printf '%s\n' "$tag" | grep -Eq "$TAG_RE" || refuse "'$tag' is not a core tag (harness-vX.Y)" "/dev-harness-sync (the newest core tag)" 2
+
+# Without the wrapper, git and gh could silently use the local user's credentials.
+if [ -z "${GH_TOKEN:-}" ] || [[ ${GIT_AUTHOR_NAME:-} != *'[bot]' ]]; then
+  refuse "sync needs the GitHub App identity" ".harness/gh-token.sh <bot> -- .harness/harness-sync $tag"
+fi
+git fetch --quiet origin || refuse "git fetch origin failed (line above)" "check the network and the bot token, then /dev-harness-sync $tag"
+git rev-parse --verify --quiet origin/main >/dev/null || refuse "origin has no main branch" "/dev-help"
+
+have=$(git show origin/main:.harness/VERSION 2>/dev/null | sed -n '1s/^core //p' || true)
+if [ "$have" = "$tag" ]; then
+  echo "harness-sync: this repository is already at core $tag"
+  ending "nothing changed: already at core $tag" "nothing" "/dev-status"
+  exit 0
+fi
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/harness-sync.XXXXXX")
+cleanup() {
+  git worktree remove --force "$tmp/checkout" >/dev/null 2>&1 || true
+  rm -rf "$tmp"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+git init --quiet "$tmp/workshop"
+git -C "$tmp/workshop" fetch --quiet --depth 1 "$WORKSHOP_URL" "refs/tags/$tag:refs/tags/$tag" \
+  || refuse "core tag $tag could not be fetched from $WORKSHOP_URL (line above)" "/dev-harness-sync (the newest core tag)"
+git -C "$tmp/workshop" checkout --quiet --detach "refs/tags/$tag"
+[ -f "$tmp/workshop/tools/sync/sync.py" ] || refuse "core tag $tag has no tools/sync/sync.py" "/dev-harness-sync (the newest core tag)"
+git worktree add --quiet --detach "$tmp/checkout" origin/main \
+  || refuse "could not check out origin/main into a temporary worktree (line above)" "/dev-harness-sync $tag"
+
+echo "harness-sync: core ${have:-(none)} -> $tag, from origin/main"
+if python3 -B "$tmp/workshop/tools/sync/sync.py" "$tag" "$tmp/checkout" --pr; then
+  ending "core $tag committed on harness-sync/$tag from origin/main, pushed, PR opened as the bot (link above); this checkout is unchanged" \
+    "review and merge the PR once its checks pass, and any step the report above gives PA" \
+    "after PA's merge, /dev-update-local-repo"
+else
+  next="fix what the lines above name, then /dev-harness-sync $tag"
+  if git show-ref --verify --quiet "refs/heads/harness-sync/$tag"; then
+    next="inspect git show harness-sync/$tag and the error above; resume the push or PR from that branch"
+  fi
+  ending "the sync to core $tag failed (lines above); this checkout is unchanged" "nothing" \
+    "$next" >&2
+  exit 1
+fi

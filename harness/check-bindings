@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# check-bindings: every agent's hook file calls the core guard (24g, F5).
+#
+# Usage: check-bindings   (from the repository root; `./dev check` and `./dev ci` run it)
+#
+# Why: `./dev sync` writes a binding file only where the repository has none. A repository with its
+# own `.claude/settings.json` (both live repositories) keeps it, and Claude Code would then run with
+# no core guard, silently. This check makes that loud until the entry is merged.
+#
+# For each binding of the core (bindings/ next to this file: `.claude/settings.json`,
+# `.codex/hooks.json`, `.agents/hooks.json`), the repository's file of the same path must exist,
+# be valid JSON and hold, in a `PreToolUse` list, a group with the binding's matcher and a hook
+# whose command is the binding's command. In the workshop the guard is `harness/guard`, in a
+# consumer `.harness/guard`: the expected command names the guard next to this file. Other hooks
+# and settings in the file are the repository's.
+#
+# Output, one line per finding, then exit 1; nothing and exit 0 when every binding is in place.
+# Needs jq, as the guard itself does. Runs on macOS /bin/bash 3.2.
+set -euo pipefail
+export LC_ALL=C
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+base="$(basename "$here")"
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "jq not found: the core guard needs it too; install jq, then run ./dev setup"
+  exit 1
+fi
+
+# Every PreToolUse group in the file, wherever the agent's format nests it.
+groups='[.. | objects | select(has("PreToolUse")) | .PreToolUse | arrays | .[] | objects]'
+
+findings=""
+for file in .claude/settings.json .codex/hooks.json .agents/hooks.json; do
+  binding="$here/bindings/$file"
+  [ -f "$binding" ] || {
+    findings="$findings$base/bindings/$file is missing from the core: re-sync the core
+"
+    continue
+  }
+  matcher="$(jq -r "$groups | .[0].matcher" "$binding")"
+  command="$(jq -r "$groups | .[0].hooks[0].command" "$binding")"
+  from="/.harness/guard"
+  to="/$base/guard"
+  command="${command/$from/$to}"
+  if [ ! -f "$file" ]; then
+    findings="$findings$file is missing: copy $base/bindings/$file there (the core guard hook)
+"
+  elif ! jq -e . "$file" >/dev/null 2>&1; then
+    findings="$findings$file is not valid JSON: fix it, then merge the PreToolUse entry of $base/bindings/$file
+"
+  elif ! jq -e --arg m "$matcher" --arg c "$command" \
+    "$groups | any(.matcher == \$m and ((.hooks // []) | arrays | any(.command == \$c)))" "$file" >/dev/null; then
+    findings="$findings$file does not call the core guard: merge the PreToolUse entry of $base/bindings/$file into it (matcher '$matcher', command '$command')
+"
+  fi
+done
+
+[ -z "$findings" ] && exit 0
+printf '%s' "$findings"
+exit 1

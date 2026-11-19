@@ -1,0 +1,5 @@
+interface:
+  display_name: "Run with owner token"
+  short_description: "Prepare one command for your own GitHub token"
+policy:
+  allow_implicit_invocation: false

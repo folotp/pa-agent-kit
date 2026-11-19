@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# check-pins: refuses a GitHub Actions `uses:` that is not pinned to a full commit SHA (24g, D1).
+#
+# Usage: check-pins   (from the repository root; `./dev check` and `./dev ci` run it when .github/
+#                      exists)
+#
+# Why: a tag or a branch can be moved to other code. The repository setting 'Require actions to be
+# pinned to a full-length commit SHA' fails such a job only at run time; this fails it in
+# `./dev check`, before a push. Dependabot (`.github/dependabot.yml`) moves the pins.
+#
+# Reads .github/workflows/*.yml|*.yaml and every .github/actions/**/action.yml|action.yaml. A value
+# passes when it is a local action or reusable workflow (`./…`), ends in `@<40 lowercase hex>`
+# (actions, and reusable workflows at job level), or is a docker image pinned by digest
+# (`docker://…@sha256:<64 lowercase hex>`). Anything else fails, an empty value included.
+#
+# Text check, no YAML parser: a line whose first key is `uses:` (block style, with or without the
+# list dash) is read; the value stops at a YAML comment (` #`), and surrounding quotes are stripped.
+# A commented-out line is not read. Flow style (`- {uses: …}`) is not read: actionlint accepts it,
+# no repository of the family uses it.
+#
+# Output, one line per unpinned value, then exit 1; nothing and exit 0 when every value passes
+# (also when there is no .github/):
+#   <file>:<line>: <value> is not pinned: use the full commit SHA with a # vX.Y.Z comment
+#
+# Runs on macOS /bin/bash 3.2 and the system awk (no regex intervals: lengths are counted).
+set -euo pipefail
+export LC_ALL=C
+
+# The awk program: its $0 and variables are awk's, not the shell's.
+# shellcheck disable=SC2016
+judge='
+function hex(s, n) { return length(s) == n && s ~ /^[0-9a-f]+$/ }
+function pinned(v,   ref) {
+  if (substr(v, 1, 2) == "./") return 1
+  if (v ~ /[[:space:]]/ || !match(v, /@[^@]*$/) || RSTART == 1) return 0
+  ref = substr(v, RSTART + 1)
+  if (v ~ /^docker:\/\//) return substr(ref, 1, 7) == "sha256:" && hex(substr(ref, 8), 64)
+  return hex(ref, 40)
+}
+/^[[:space:]]*(-[[:space:]]+)?uses:/ {
+  v = $0
+  sub(/^[[:space:]]*(-[[:space:]]+)?uses:/, "", v)
+  sub(/[[:space:]]#.*$/, "", v)
+  sub(/^[[:space:]]+/, "", v)
+  sub(/[[:space:]]+$/, "", v)
+  q = substr(v, 1, 1)
+  if (length(v) >= 2 && (q == "\"" || q == "\047") && substr(v, length(v), 1) == q) v = substr(v, 2, length(v) - 2)
+  if (!pinned(v)) printf "%s:%d: %s is not pinned: use the full commit SHA with a # vX.Y.Z comment\n", FILENAME, FNR, v
+}
+'
+
+files() {
+  if [ -d .github/workflows ]; then
+    find .github/workflows -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \)
+  fi
+  if [ -d .github/actions ]; then
+    find .github/actions -type f \( -name action.yml -o -name action.yaml \)
+  fi
+}
+
+found="$(files | sort | while IFS= read -r f; do awk "$judge" "$f"; done)"
+[ -z "$found" ] && exit 0
+printf '%s\n' "$found"
+exit 1

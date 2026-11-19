@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# check-dependabot: Dependabot must keep the SHA pins of GitHub Actions moving (24g, D2 variant (a)).
+#
+# Usage: check-dependabot   (from the repository root; `./dev check` and `./dev ci` run it when
+#                            .github/workflows/ exists)
+#
+# Why: check-pins makes every action a SHA pin, and a pin never moves by itself. Dependabot's
+# `github-actions` entry moves them, at least a week after a release (report 2.8: a compromised or
+# yanked release is usually caught by then). With `directory: /` it reads `.github/workflows/` and a
+# root `action.yml` only, so a local action under `.github/actions/` that calls a remote action is
+# never bumped unless the entry lists its directory (GitHub's Dependabot options reference,
+# 'directories or directory', https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference).
+#
+# Rules, when .github/workflows/ exists (otherwise nothing is checked):
+#   - .github/dependabot.yml (or .yaml) exists and has at least one `github-actions` entry;
+#   - every `github-actions` entry sets `cooldown: default-days:` to 7 or more (Dependabot's own
+#     default is 3 days when the key is absent);
+#   - every .github/actions/**/action.y*ml whose `uses:` names a remote action (not `./…`, not
+#     `docker://…`) is in the `directory` or one of the `directories` of a `github-actions` entry.
+#     A `directories` item may be a glob: `*` matches within one path segment, `**` any number
+#     of segments (for example "/.github/actions/*").
+# Schedule, groups and commit prefix are the repository's choice (PA's variant (a)): not judged.
+# Other ecosystems are not read.
+#
+# Text check, no YAML parser: entries are the list items under the top-level `updates:` key, in
+# block style (the form every repository of the family and the template use); quotes and trailing
+# comments are stripped. Output, one line per finding, then exit 1; nothing and exit 0 otherwise.
+# Runs on macOS /bin/bash 3.2 and the system awk.
+set -euo pipefail
+# No pathname expansion: directory globs such as /.github/actions/* are Dependabot's, not the shell's.
+set -f
+export LC_ALL=C
+
+template="$(basename "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)")/templates/dependabot.yml"
+
+[ -d .github/workflows ] || exit 0
+
+config=""
+for c in .github/dependabot.yml .github/dependabot.yaml; do
+  if [ -f "$c" ]; then
+    config="$c"
+    break
+  fi
+done
+if [ -z "$config" ]; then
+  echo ".github/dependabot.yml is missing: copy $template there (a sync writes it when absent), then add the repository's other ecosystems below its entry"
+  exit 1
+fi
+
+# One record per `updates:` item: <line> TAB <ecosystem> TAB <cooldown default-days> TAB <directory
+# and directories, space-separated>; an absent value is `-` (`read` would merge two tabs). Items start at the indent of the first `- `
+# under `updates:`; keys are read at that indent plus two.
+# The awk program: its $0 and variables are awk's, not the shell's.
+# shellcheck disable=SC2016
+entries='
+function clean(v) {
+  sub(/[[:space:]]#.*$/, "", v); sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v)
+  q = substr(v, 1, 1)
+  if (length(v) >= 2 && (q == "\"" || q == "\047") && substr(v, length(v), 1) == q) v = substr(v, 2, length(v) - 2)
+  return v
+}
+function flush() { if (start) printf "%d\t%s\t%s\t%s\n", start, (eco == "" ? "-" : eco), (days == "" ? "-" : days), dirs; start = 0; eco = days = dirs = "" }
+function indent(s) { match(s, /^ */); return RLENGTH }
+/^[[:space:]]*(#.*)?$/ { next }
+/^updates:/ { inside = 1; next }
+/^[^ ]/ { if (inside) flush(); inside = 0; next }
+!inside { next }
+{
+  line = $0
+  n = indent(line)
+  if (item < 0 && line ~ /^ *- /) item = n
+  if (item >= 0 && n == item && substr(line, n + 1, 2) == "- ") {
+    flush(); start = NR; line = substr(line, 1, n) "  " substr(line, n + 3); n = item + 2
+  }
+  if (!start) next
+  if (n == item + 2 && block == "directories" && line ~ /^ *- /) {
+    sub(/^ *- /, "", line); dirs = dirs " " clean(line)
+  } else if (n == item + 2) {
+    key = line; sub(/^ */, "", key); val = key
+    sub(/:.*$/, "", key); sub(/^[^:]*:/, "", val); val = clean(val)
+    block = ""
+    if (key == "package-ecosystem") eco = val
+    else if (key == "directory") dirs = dirs " " val
+    else if (key == "directories" && val ~ /^\[/) {
+      gsub(/[][]/, "", val); k = split(val, parts, ",")
+      for (i = 1; i <= k; i++) dirs = dirs " " clean(parts[i])
+    } else if (key == "directories" || key == "cooldown") block = key
+  } else if (n > item + 2 && block == "directories" && line ~ /^ *- /) {
+    sub(/^ *- /, "", line); dirs = dirs " " clean(line)
+  } else if (n > item + 2 && block == "cooldown" && line ~ /^ *default-days:/) {
+    sub(/^ *default-days:/, "", line); days = clean(line)
+  }
+}
+END { flush() }
+'
+records="$(awk -v item=-1 "$entries" "$config")"
+
+findings=""
+add() {
+  findings="$findings$1
+"
+}
+
+# The directories of github-actions entries with a sufficient cooldown, space-separated.
+covered=""
+seen=""
+while IFS="$(printf '\t')" read -r line eco days dirs; do
+  [ "$eco" = "github-actions" ] || continue
+  seen=1
+  if [ "$days" = "-" ]; then
+    add "$config:$line: the github-actions entry has no cooldown: add 'cooldown:' with 'default-days: 7' (Dependabot's default is 3 days)"
+  elif ! [[ "$days" =~ ^[0-9]+$ ]] || [ "$days" -lt 7 ]; then
+    add "$config:$line: the github-actions entry has cooldown default-days $days: use 7 or more"
+  fi
+  covered="$covered $dirs"
+done <<EOF
+$records
+EOF
+[ -n "$seen" ] || add "$config: no github-actions entry: add the one of $template above the repository's other entries"
+
+# Does the Dependabot directory pattern $1 name the directory $2? Both are split on `/`; `**`
+# matches any number of segments, any other segment is a shell pattern within one segment.
+segments_match() {
+  local p="$1" d="$2" head rest
+  if [ -z "$p" ]; then
+    [ -z "$d" ]
+    return
+  fi
+  head="${p%%/*}"
+  if [ "$head" = "$p" ]; then rest=""; else rest="${p#*/}"; fi
+  if [ "$head" = "**" ]; then
+    segments_match "$rest" "$d" && return 0
+    [ -n "$d" ] || return 1
+    case "$d" in */*) segments_match "$p" "${d#*/}" ;; *) segments_match "$p" "" ;; esac
+    return
+  fi
+  [ -n "$d" ] || return 1
+  local dhead="${d%%/*}" drest
+  if [ "$dhead" = "$d" ]; then drest=""; else drest="${d#*/}"; fi
+  # shellcheck disable=SC2053
+  [[ "$dhead" == $head ]] && segments_match "$rest" "$drest"
+}
+
+# Normalise a directory to no leading or trailing slash ("/" becomes "").
+norm() {
+  local v="$1"
+  while [ "${v#/}" != "$v" ]; do v="${v#/}"; done
+  while [ "${v%/}" != "$v" ]; do v="${v%/}"; done
+  printf '%s' "$v"
+}
+
+if [ -d .github/actions ]; then
+  while IFS= read -r action; do
+    [ -n "$action" ] || continue
+    # A remote action: a `uses:` value that is neither local nor a docker image.
+    remote="$(awk '/^[[:space:]]*(-[[:space:]]+)?uses:/ { v = $0; sub(/^[^:]*:[[:space:]]*/, "", v); gsub(/["\047]/, "", v); if (v !~ /^(\.\/|docker:\/\/)/ && v != "") { print "yes"; exit } }' "$action")"
+    [ -n "$remote" ] || continue
+    dir="$(norm "$(dirname "$action")")"
+    ok=""
+    for pattern in $covered; do
+      if segments_match "$(norm "$pattern")" "$dir"; then
+        ok=1
+        break
+      fi
+    done
+    [ -n "$ok" ] || add "$action uses a remote action, but no github-actions entry of $config covers /$dir: list it under that entry's 'directories' (for example \"/\" and \"/.github/actions/*\")"
+  done <<EOF
+$(find .github/actions -type f \( -name action.yml -o -name action.yaml \) | sort)
+EOF
+fi
+
+[ -z "$findings" ] && exit 0
+printf '%s' "$findings"
+exit 1

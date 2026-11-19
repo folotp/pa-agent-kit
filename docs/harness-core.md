@@ -1,8 +1,6 @@
 # Harness core
 
-The core is the small, sealed part of the development harness that every repository of the family shares: the `dev` dispatcher, its mise pins and a CI skeleton. It lives in `harness/`. This page records what the core contains, what was left out of it, and how to operate and change it.
-
-Status: the dispatcher and CI skeleton (session 19); the gate wrapper, the guard, the agent bindings and the GitHub App token script (session 20). `./dev sync`, the checksum check and the workaround register (session 23). Session 24c, from the phase 3 review (findings K6, K10, K14, K20 to K25): the gate's order, history check, fixed guarded set, environment checks and baseline; the core git hooks; the token script's `--read-only` and `--print`; sync by commit, with modes, refusing a differing root file.
+The workshop ships the shared dispatcher, checks, release gate, guard, Git hooks, token wrapper, command skills and consumer templates from `harness/`. Each consumer keeps its tool pins and repository settings at its root. The sync reads `harness/core.files` at the selected revision and installs the listed files under `.harness/`.
 
 | File | Role |
 |---|---|
@@ -12,7 +10,41 @@ Status: the dispatcher and CI skeleton (session 19); the gate wrapper, the guard
 | `harness/githooks/` | The core git hooks, `pre-commit` and `pre-push` ('Git hooks'). |
 | `harness/guard`, `harness/bindings/` | The pre-tool-use guard and its three binding templates ('Guard'). |
 | `harness/gh-token.sh`, `harness/gh-token.md` | Agents' GitHub identities: a one-hour App token per command, and PA's token behind a Keychain prompt ('Token script'). |
+| `harness/check-pins` | Check workflow and composite-action references. |
+| `harness/check-dependabot` | Check the Actions cooldown and directory coverage for local actions. |
+| `harness/check-bindings` | Verify that each client's hook invokes the guard. |
+| `harness/git-prune-merged.sh` | Remove local branches and clean worktrees after verifying the merged PR's exact tip. |
+| `harness/commands` | Index commands, check their metadata and list pending actions for PA. |
+| `harness/skills/` | Nine shared commands. Each skill carries its instructions and client invocation policy. |
+| `harness/skill-links` | Install or check skill discovery links. |
+| `harness/harness-sync` | Select a workshop tag and open a consumer sync PR as the bot. |
+| `harness/README.md`, `harness/templates/` | Consumer operating guide, starter files and CI skeleton. |
+| `harness/core.files` | Inventory read at the selected Git revision. |
 | `harness.toml`, `mise.toml`, `mise.lock` | Settings and pins, per repository. |
+
+## Core or workshop
+
+Every core file serves two or more repositories and is tested in the workshop. This rule replaces the former 600-line aim. The following decisions govern the first tag.
+
+| Area | Where it belongs |
+|---|---|
+| Dispatcher, parser, gate and guard | Core. Repository-specific deployment commands stay in the consumer. |
+| GitHub identities and recovery | Core wrapper and operator guide. Each repository updates references to the owner command. |
+| Git hooks and client bindings | Core templates and checks. A consumer merges its own hooks when adopting the guard. |
+| Actions pins | Core check for workflows and local composite actions. |
+| Dependabot | Core starter and minimum Actions policy. Consumers choose schedules, groups, prefixes and other ecosystems. |
+| Agent instructions | Core starter and marked shared block. Repository sections contain local rules. |
+| CI | Core skeleton and missing-workflow report. The repository owns workflow files, aggregate jobs and any Claude job result checks. |
+| Commands and guidance | Core index, status, nine skills, discovery links, refusal guidance and next-step output. Workshop tests cover the command contract. |
+| Branch cleanup | Core exact-tip prune with repository-specific protected branch names. Other local Git safety hooks stay with their owners. |
+| Sync | Consumer launcher in core. Revision reader, installer, fixtures and tests in the workshop. |
+| Core documentation | The consumer guide and token recipes ship with the core. The design history and runbooks live here. |
+| Plugin operations | Version enforcement, manifests, packaging, release, workshop commands and marketplace docs stay in the workshop. |
+| Specifications and client workarounds | Spec lock, scheduled checks, probes and harness review stay in the workshop for this tag. |
+| Documentation checks | Workshop work covers cited paths and command documentation checks. |
+| GitHub settings | CODEOWNERS, settings baselines, drift commands and repository creation belong to provisioning. |
+| Repository policy | Tool pins, ignore rules, linting, PR templates, secret-access hooks, domain agents and issue workflows stay with their repositories. |
+| Live operations | State, deployment, Terraform, connector credentials and local command names stay with the consumer. |
 
 ## Inventory of the imported harness
 
@@ -45,17 +77,22 @@ Still open, outside this page: the `pa-toolkit` plugin's `config/release.json`, 
 | `setup` | Installs the locked mise tools (`mise install --locked`) and the core git hooks (`core.hooksPath`, 'Git hooks'). The only verb that installs anything. Runs in PA's terminal: the agent sandbox cannot write `.git/config`. |
 | `check` | Verifies that every tool named in `harness.toml` resolves under mise, that a synced core matches its `CHECKSUMS`, and that the active git hooks are the core's; prints each tool's resolved version (`mise which --version`) and path, then runs the repository's own offline `check` command if `harness.toml` names one. |
 | `ci` | The same tool and core verification and offline `check` command, then every check listed in `harness.toml`, in order. Stops at the first failure. Every check command runs as `bash -o pipefail -c`, so a failure early in a pipeline counts. |
+| `update-local-repo` | Fetch and fast-forward a clean main checkout, run setup, and prune verified merged branches when a bot token is available. Reports when changed agent files need a session restart. |
 | `gate [<sha>]` | The read-only checks of the release gate ('Gate wrapper'). `gate --baseline <sha>`: PA's recovery of the release record ('Baseline'). |
 | `apply`, `deploy` | The release, in a repository with a `[gate]` table; handed to `harness/gate` before any re-run. |
 | `x <command…>` | Runs any command under the pinned tools. |
 | `<verb> [args…]` | A verb the repository declares in the `[verbs]` table of `harness.toml` (here `specs`). Runs under the pinned tools; arguments reach the command as positional parameters. |
 
+Both `check` and `ci` check action pins, Dependabot coverage, guard bindings and skill links before running repository checks. In `harness.toml`, the optional top-level array `protected_branches = ["integration"]` adds local names to the prune script’s built-in protection for `main` and `master`.
+
 Rules, from report 2.4:
 
-- `./dev` re-runs itself under `mise exec --locked` before doing anything, so no tool comes from the shell.
+- `./dev` runs ordinary verbs under `mise exec --locked`. The update verb fetches before setup installs changed pins. Release verbs enter the gate’s clean environment.
 - It finds mise by `PATH`, then in the usual install locations, because hooks and scheduled jobs run with a minimal `PATH`.
-- It fails closed: a missing mise, or a tool resolved outside mise's directories, stops it with one line. There is no fallback to a system version.
+- It fails closed: a missing mise, or a tool resolved outside mise's directories, stops it with one refusal line. There is no fallback to a system version.
 - Nothing is installed in passing: `auto_install` is off in `mise.toml`.
+
+**Output rule (24i, built in session 24h, row I3).** `check`, `ci`, every refusal of `harness/dev` and `harness/gate`, the gate's own ends (a passing `./dev gate`, a release, a dry run, a baseline) and every refusal of `harness/gh-token.sh` end with three lines: `done: <what happened>`, `left for PA: <what, or nothing>`, `next: <one exact step>`, the last a `/dev-` command where one exists (`/dev-run-ci-locally`, `/dev-check-release-readiness`, `/dev-harness-sync`, `/dev-help`), else the exact command (`./dev setup, in PA's own terminal`). Success goes to stdout, a refusal to stderr. Only messages changed; no decision did. `tests/test_dev.py`, `tests/test_gate.py` and `tests/test_gh_token.py` hold them (`OutputRuleTest`, `OwnerModeTest`). The sync's report keeps its form until the next tag.
 
 ## `harness.toml`
 
@@ -276,9 +313,12 @@ The unit tests replace GitHub with a `gh` shell function that answers from files
 | Always | a push to `main` or `master`; a push of every branch (`--all`, `--mirror`, a bare `:`) or of a wildcard refspec (`refs/heads/*:…`); a force push (`--force`, `-f`, `--force-with-lease`, `--force-if-includes`, `+refspec`, a short-flag cluster holding `f` such as `-fu`); a remote branch deletion (`--delete`, `-d`, `:branch`, `--prune`); git's abbreviations of those long options (`--forc`, `--del`); a skipped git hook (`--no-verify` on any git command, `git commit -n`, `-c core.hooksPath=` or `--config-env=core.hooksPath=` on any git command); a git alias defined on the command line (`-c alias.…`) | PA merges; the git hooks run `./dev check` |
 | Always | `gh pr merge` and `gh pr ready`, with any flags before the group or the verb (`gh -R o/r pr merge 5`, `gh pr -R o/r merge 5`; the same holds for `gh release` and `gh api` below); the REST merge endpoint; the GraphQL mutations `mergePullRequest`, `markPullRequestReadyForReview` and `enablePullRequestAutoMerge` anywhere in a command | PA merges and marks PRs ready (session 24, K2) |
 | Always | `gh release create` (or `new`) without `--draft`/`-d`; `--draft=false` (or `0`, `f`) on `gh release create` or `edit`; a `gh api` write to a `releases` path (a POST, PATCH or PUT, or any field) without `draft=true`, or with `draft=false` | releases stay drafts until PA publishes them; with immutability on, a published release is permanent (K8) |
+| Always | a local branch deleted by force: `git branch -D`, a short-flag cluster holding `D`, or a delete flag with a force flag in any order (`-d -f`, `-df`, `--delete --force`, `--force -d`, abbreviations); `git branch -d`, `-m`, `-M`, `-f` alone and `--list` pass | nothing checks that a force-deleted branch was merged; `/dev-delete-merged-branches` deletes only what GitHub shows merged at the local tip (24g I2, 24f F2) |
 | Where nobody answers a prompt | `./dev apply`, `./dev deploy` (quoted, through a path, `mise exec`, `gh-token.sh` or `bash -c` too) and `gate release` / `gate --stage2` | the release confirms on the terminal and prompts in the Keychain |
 
 "Where nobody answers a prompt" means: a Claude Code cloud session (`CLAUDE_CODE_REMOTE=true`); a permission mode other than `default`, `acceptEdits`, `plan` or `auto` (`bypassPermissions`, where session 12 saw an `ask` rule not prompt; `dontAsk`; a missing mode); and Antigravity, whose payload carries no mode. Everything else passes: the guard is not a permission system, and the repository's own rules and hooks (the connector guards of `ha-config`, for instance) stay beside it.
+
+**Messages.** Each denial names the sanctioned way in the same line (24i's refusal rule): a `/dev-` command (`/dev-status` for a PR to merge, `/dev-delete-merged-branches`, `/dev-run-ci-locally` for a skipped hook, `/dev-check-release-readiness` for a release verb, `/dev-plugin-release` or `/dev-run-with-owner-token` to publish) or a command in backticks (the bot's push and draft PR, with the token script's path as the agent sees it: `harness/gh-token.sh` in the workshop, `.harness/gh-token.sh` in a consumer; `./dev setup` for a guard that cannot run). `tests/test_guard.py` checks every denial for one. A refusal is final: the agent runs what it names, or tells PA.
 
 It fails closed: no `jq`, a payload it cannot read, a judged command that is present but not a string (an array, a number), a command longer than 200,000 bytes, a split that jq did not finish, or an unknown agent denies the call. It uses bash 3.2 builtins and `jq` only (`/usr/bin/jq` ships with macOS; CI runners have it) and writes no temporary file (until session 24b a here-document did, and an unwritable temporary folder let every command through).
 
@@ -325,7 +365,7 @@ Delivery, checked by hand on 2026-11-17 (session 20) with `git push --dry-run or
 
 ## Token script
 
-`harness/gh-token.sh` mints a one-hour GitHub App installation token for one repository, runs one command as `<app>[bot]` and revokes the token; `pa -- <command>` releases PA's own token through a Keychain prompt for one command. It moved from `ha-config/scripts/` in session 20 with no change in behaviour: only two mentions of its documentation's path differ (checked by `diff`, and by a `--info` read-back from the new place). Setup, rights and failure behaviour: `harness/gh-token.md`. Until a live repository syncs the core, its own copy stays and either copy serves any repository. The gate's 'no GitHub token' refusal names it.
+`harness/gh-token.sh` mints a one-hour GitHub App installation token for one repository, runs one command as `<app>[bot]` and revokes the token; `owner -- <command>` releases PA's own token through a Keychain prompt for one command. It moved from `ha-config/scripts/` in session 20 with no change in behaviour: only two mentions of its documentation's path differ (checked by `diff`, and by a `--info` read-back from the new place). Setup, rights and failure behaviour: `harness/gh-token.md`. Until a live repository syncs the core, its own copy stays and either copy serves any repository. The gate's 'no GitHub token' refusal names it.
 
 Session 24c changed it (finding K24, PA's yes to the interface change):
 
@@ -333,7 +373,9 @@ Session 24c changed it (finding K24, PA's yes to the interface change):
 - Printing a token needs `--print`; `gh-token.sh <app>` alone prints the usage and exits 2. A printed token is the caller's and is never revoked by the script.
 - In `--info` and `-- CMD` modes an exit trap, set right after the token is minted, revokes it on any exit: the end of the command, an error of the script, Ctrl-C or `TERM`. The command's exit status is kept.
 - Every API request times out after 30 seconds.
-- Owner mode (`pa -- CMD`) exports PA's token to the command and everything it starts, for as long as they run; nothing narrows or revokes it, so the command must be one named operation, never a shell or a tool that runs other code (`harness/gh-token.md`).
+- Owner mode exports PA's token to the command and everything it starts, for as long as they run; nothing narrows or revokes it, so the command must be one named operation, never a shell or a tool that runs other code (`harness/gh-token.md`).
+
+Session 24h renamed the owner mode (24g row C6, PA's decision; the interface freezes at the first core tag): the argument is `owner` (`gh-token.sh owner -- CMD`), and `pa` is refused with one line naming `owner` (no alias). The Keychain item is `github-owner-token` (was `github-pa-token`); PA re-creates it once with the command `harness/gh-token.md` gives ('Owner token'). The script first reads the item's attributes, which shows no dialog and returns no secret, so a missing item (it prints the one-time `security add-generic-password` command) is told apart from a denied dialog (nothing ran; re-run and click Allow); both end with `done:`, `left for PA:` and `next:` lines. `tests/test_gh_token.py` covers both, the refusal of `pa` and a released token reaching the command.
 
 `ha-config`'s copy (`scripts/gh-token.sh`) keeps the old interface until session 27 replaces it with the core's.
 
@@ -345,9 +387,11 @@ Repository skills live in `.agents/skills/<name>/`. Claude Code does not load th
 
 **Probe** (the first entry of the workaround register; re-run it to see whether the symlink can go). In a throwaway project holding one `SKILL.md` under `.agents/skills/<name>/`, run `claude -p "ok" --model haiku --output-format stream-json --verbose` and look for the name in the `skills` list of the `system`/`init` event. Result, 2026-11-17, macOS terminal: **absent** without the symlink, **listed** with it.
 
-This repository has no skills of its own yet: its two helpers are slash commands in `.claude/commands/`, so `.agents/skills/` holds only a `.gitkeep`.
+The workshop links each core skill from `.agents/skills/<name>` to `../../harness/skills/<name>`. Its local harness review skill lives beside those links. The command index resolves the links so each core skill appears once.
 
-**Desktop app and cloud session** (2026-11-17, branch `kit-agent-files`, read-only prompt, Claude Code; version not shown by either surface). Both loaded `AGENTS.md` (the shared block) and the Claude-only section of `CLAUDE.md`; both listed `bump-plugin` and `new-plugin-skeleton` (shown as skills, not as commands); both showed `.claude/skills -> ../.agents/skills`; both refused `git push --dry-run origin HEAD:main` through the guard hook. The desktop app was tried in its local-session option (a local worktree, Code tab); its cloud-session option is the cloud result. Because the repository has no skills yet, the probe shows that the symlink survives checkout on both surfaces, not that a skill under `.agents/skills/` loads there; only the terminal probe (throwaway project) shows that. A guard refusal blocks the whole Bash call when the denied command is chained with others: run it alone.
+On 2026-11-19 a disposable consumer used a relative link from `.agents/skills/<name>` into `.harness/skills/`, plus the Claude directory link. Claude Code 2.1.327 listed the probe in its startup skill and slash-command lists. Antigravity 1.5.11 returned the marker from the linked skill body.
+
+**Desktop app and cloud session** (2026-11-17, branch `kit-agent-files`, read-only prompt, Claude Code; version not shown by either surface). Both loaded `AGENTS.md` (the shared block) and the Claude-only section of `CLAUDE.md`; both listed `bump-plugin` and `new-plugin-skeleton` (shown as skills, not as commands); both showed `.claude/skills -> ../.agents/skills`; both refused `git push --dry-run origin HEAD:main` through the guard hook. The desktop app was tried in its local-session option (a local worktree, Code tab); its cloud-session option is the cloud result. At the time the repository had no skills, so the probe shows that the symlink survives checkout on both surfaces, not that a skill under `.agents/skills/` loads there; only the terminal probe (throwaway project) shows that. A guard refusal blocks the whole Bash call when the denied command is chained with others: run it alone.
 
 ## Path filters
 
@@ -373,6 +417,8 @@ Report 2.7. This repository follows upstream specifications (Agent Skills, Agent
 
 `./dev sync <rev> <consumer-checkout> [--pr] [--keep-root <file>]…` runs in the workshop (a verb of this repository's `harness.toml`, `tools/sync/sync.py`, not part of the core). `<rev>` is a core tag (`harness-vX.Y`) or any commit-ish; it is resolved to a commit once, and every file is read from that commit, never from the working tree or the revision name again (so a tag that moves during the run cannot disagree with `VERSION`, Codex C6). `harness/core.files` lists what is core; since session 23b it names every tracked file under `harness/`, and nothing else reaches a consumer.
 
+From a consumer, invoke `/dev-harness-sync [<tag>]`. By default the launcher selects the newest numeric `harness-vX.Y` tag. It fetches the workshop tag into temporary storage and runs its sync on a detached worktree of the consumer’s fetched `origin/main`. The current checkout can have work in progress. If the installer reports differing root files, review them and use the workshop command with explicit `--keep-root` choices. After a push or PR failure, inspect the reported branch before resuming.
+
 In the consumer, on a new branch `harness-sync/<rev>` and in one commit:
 
 | What | Rule |
@@ -380,7 +426,19 @@ In the consumer, on a new branch `harness-sync/<rev>` and in one commit:
 | `.harness/` | Replaced as a whole, byte for byte and mode for mode, with `VERSION` (revision and commit) and `CHECKSUMS` (one line per file: `<mode> <sha256> <path>`, mode `644` or `755`). Never merged or edited in place, so there is nothing to resolve. |
 | `dev`, bindings (`.claude/settings.json`, `.codex/hooks.json`, `.agents/hooks.json`), `CLAUDE.md` | Written when the root file is absent; never overwritten. A root file that exists and differs leaves part of the core unwired (finding K22: the dispatcher for `dev`, the guard hook of that client for a binding), so the sync stops before writing anything, names each file and what would stay unwired, and exits 1, unless `--keep-root <file>` names it. A kept file is reported with the same consequence, in the commit and the PR body. |
 | `AGENTS.md` shared block | Replaced between the `harness:shared` markers when both are present once; otherwise reported. |
-| `.claude/skills` | Checked, reported, never changed. |
+| `AGENTS.md`, `.github/dependabot.yml` | The `STARTERS` mapping installs each missing file once. Existing starters are kept and reported. The sync also reports a kept `CLAUDE.md` missing its initial `@AGENTS.md`. |
+| Skill links | Install relative links in `.agents/skills/` and any real `.claude/skills/`. Preserve and report collisions. Remove retired core links. Report the directory-link command where Claude's directory is missing. |
+| CI workflow | When no workflow runs `./dev ci`, the report points to `.harness/templates/ci.yml` and the owner-token push needed to install it. |
+| `harness/check-pins` | Check workflow and composite-action references. |
+| `harness/check-dependabot` | Check the Actions cooldown and directory coverage for local actions. |
+| `harness/check-bindings` | Verify that each client's hook invokes the guard. |
+| `harness/git-prune-merged.sh` | Remove local branches and clean worktrees after verifying the merged PR's exact tip. |
+| `harness/commands` | Index commands, check their metadata and list pending actions for PA. |
+| `harness/skills/` | Nine shared commands. Each skill carries its instructions and client invocation policy. |
+| `harness/skill-links` | Install or check skill discovery links. |
+| `harness/harness-sync` | Select a workshop tag and open a consumer sync PR as the bot. |
+| `harness/README.md`, `harness/templates/` | Consumer operating guide, starter files and CI skeleton. |
+| `harness/core.files` | Inventory read at the selected Git revision. |
 | `harness.toml`, `mise.toml`, `mise.lock` | The consumer's; never touched. |
 
 The sync refuses a target that is not the top of a work tree, is the workshop, has uncommitted changes, already has the branch, has a differing root file not named by `--keep-root`, or already has this core ("nothing changed"; a failed run leaves no branch); and a `--keep-root` that names no root file of the core. Without `--pr` nothing leaves the machine; with it the branch is pushed and one PR is opened with `gh`, its body holding the report. Credentials are the caller's: an agent wraps the whole command in `harness/gh-token.sh`.
@@ -389,4 +447,4 @@ The sync refuses a target that is not the top of a work tree, is the workshop, h
 
 ## Workaround register and harness review
 
-`docs/workaround-register.md` lists every workaround with its reason, exit condition and probe (`tools/probes/`); `tests/test_register.py` keeps it complete. The `harness-review` skill (`.agents/skills/harness-review/`) runs the probes and reads the pins, `specs.lock` and the agents' release notes twice a year, in two modes (workshop, consumer), and only proposes. `.github/workflows/harness-review-due.yml` opens the issue when a review is due.
+`docs/workaround-register.md` lists every workaround with its reason, exit condition and probe (`tools/probes/`); `tests/test_register.py` keeps it complete. The `harness-review` skill (`.agents/skills/harness-review/`) runs the probes and reads the pins, `specs.lock` and the agents' release notes twice a year, in the workshop and only proposes changes. Consumer review is deferred beyond the first tag. `.github/workflows/harness-review-due.yml` opens the issue when a review is due.

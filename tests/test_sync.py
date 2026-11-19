@@ -124,6 +124,103 @@ class SyncTest(unittest.TestCase):
         self.assertTrue((self.consumer / ".codex" / "hooks.json").is_file())
         self.assertIn("`.claude/skills` is not the symlink", result.stdout)
 
+    def test_installs_verifies_and_retires_only_core_skill_links(self):
+        agents = self.consumer / ".agents/skills"
+        claude = self.consumer / ".claude/skills"
+        for directory in (agents, claude):
+            directory.mkdir(parents=True)
+            (directory / "dev-retired").symlink_to("../../.harness/skills/dev-retired")
+            (directory / "dev-own").symlink_to("../own")
+        (claude / "dev-help").mkdir()
+        git(self.consumer, "add", "-A")
+        git(self.consumer, "commit", "-qm", "consumer skills")
+        result = self.sync()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("kept .claude/skills/dev-help", result.stdout)
+        self.assertFalse((claude / "dev-help").is_symlink())
+        check = self.consumer / ".harness/skill-links"
+        self.assertNotEqual(subprocess.run([check], cwd=self.consumer, capture_output=True).returncode, 0)
+        (claude / "dev-help").rmdir()
+        (claude / "dev-help").symlink_to("../../.harness/skills/dev-help")
+        for directory in (agents, claude):
+            self.assertFalse((directory / "dev-retired").is_symlink())
+            self.assertEqual(os.readlink(directory / "dev-own"), "../own")
+            for source in (self.consumer / ".harness/skills").iterdir():
+                self.assertEqual(os.readlink(directory / source.name), f"../../.harness/skills/{source.name}")
+        subprocess.run([check], cwd=self.consumer, check=True)
+        (agents / "dev-help").unlink()
+        self.assertNotEqual(subprocess.run([check], cwd=self.consumer, capture_output=True).returncode, 0)
+
+    def test_dependabot_template_is_written_only_when_absent(self):
+        """24g D2: a starting point, never compared once the repository has its own."""
+        result = self.sync()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.consumer / ".github" / "dependabot.yml").read_bytes(), (ROOT / "harness" / "templates" / "dependabot.yml").read_bytes())
+        self.assertIn("`.github/dependabot.yml` written from `.harness/templates/dependabot.yml` (was absent)", result.stdout)
+
+    def test_an_existing_dependabot_file_is_kept_and_reported(self):
+        for name in ("dependabot.yml", "dependabot.yaml"):
+            with self.subTest(name):
+                self.setUp()
+                own = self.consumer / ".github" / name
+                own.parent.mkdir()
+                own.write_text("version: 2\nupdates: []\n")
+                git(self.consumer, "add", "-A")
+                git(self.consumer, "commit", "-q", "-m", "own dependabot")
+                result = self.sync()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(own.read_text(), "version: 2\nupdates: []\n")
+                self.assertEqual(sorted(p.name for p in own.parent.iterdir()), [name])
+                self.assertIn(f"`.github/{name}` kept as it is (the repository's own; `./dev check` judges", result.stdout)
+
+    def test_agents_md_is_written_when_absent_with_the_shared_block_filled(self):
+        """24g F1: without AGENTS.md no shared-block line reaches Codex or Antigravity."""
+        result = self.sync()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = (self.consumer / "AGENTS.md").read_text()
+        block = (ROOT / "harness" / "templates" / "AGENTS.shared.md").read_text().strip("\n")
+        self.assertIn(block, text)
+        self.assertTrue(text.startswith("# Agent instructions\n"))
+        self.assertIn("`AGENTS.md` written from `.harness/templates/AGENTS.md` (was absent)", result.stdout)
+        self.assertIn("`AGENTS.md`: shared block replaced", result.stdout)
+        self.assertNotIn("`CLAUDE.md` does not start with `@AGENTS.md`", result.stdout)
+
+    def test_ci_template_is_reported_never_written(self):
+        """24g W6: a workflow file in the sync commit would make the bot's push fail."""
+        line = "No workflow under `.github/workflows/` runs `./dev ci`: copy `.harness/templates/ci.yml`"
+        result = self.sync()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(line, result.stdout)
+        self.assertIn("PA pushes that commit with the owner token (`/dev-run-with-owner-token`", result.stdout)
+        self.assertFalse((self.consumer / ".github" / "workflows").exists())
+
+        self.setUp()
+        own = self.consumer / ".github" / "workflows" / "build.yaml"
+        own.parent.mkdir(parents=True)
+        own.write_text("jobs:\n  a:\n    steps:\n      - run: ./dev ci\n")
+        git(self.consumer, "add", "-A")
+        git(self.consumer, "commit", "-q", "-m", "own ci")
+        result = self.sync()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(line, result.stdout)
+        self.assertEqual(sorted(p.name for p in own.parent.iterdir()), ["build.yaml"])
+
+    def test_the_workshops_agents_md_carries_the_current_shared_block(self):
+        """The workshop's own AGENTS.md holds the block the sync lays down everywhere."""
+        block = (ROOT / "harness" / "templates" / "AGENTS.shared.md").read_text().strip("\n")
+        text = (ROOT / "AGENTS.md").read_text()
+        self.assertIn(block, text)
+        self.assertLess(len(text.encode()), 24_000)
+
+    def test_a_claude_md_that_does_not_import_agents_md_is_reported(self):
+        (self.consumer / "CLAUDE.md").write_text("# Own rules\n")
+        git(self.consumer, "add", "-A")
+        git(self.consumer, "commit", "-q", "-m", "own claude")
+        result = self.sync("--keep-root", "CLAUDE.md")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.consumer / "CLAUDE.md").read_text(), "# Own rules\n")
+        self.assertIn("`CLAUDE.md` does not start with `@AGENTS.md`: Claude Code does not read `AGENTS.md`", result.stdout)
+
     def test_shared_block_is_replaced_between_markers_only(self):
         begin, end = "<!-- harness:shared:begin -->", "<!-- harness:shared:end -->"
         (self.consumer / "AGENTS.md").write_text(f"top\n{begin}\nold\n{end}\nown rules\n")

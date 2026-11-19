@@ -1,64 +1,68 @@
 # gh-token.sh — agent GitHub identities and PA's prompted token
 
 Agents (Claude, Codex, Antigravity) act on GitHub as their own GitHub App, so
-their commits, PRs and comments show as `<slug>[bot]`. PA's own token is not
-held by any agent shell: it is released through a Keychain prompt, for one
-command at a time. Design: harness report §2.3 item 6.
+their commits, PRs and comments show as `<slug>[bot]`. PA's own token (the
+owner token) is not held by any agent shell: it is released through a Keychain
+prompt, for one command at a time. Design: harness report §2.3 item 6.
 
-The script is part of the harness core (`harness/gh-token.sh` in `pa-agent-kit`,
-`.harness/gh-token.sh` in a repository that syncs the core). It moved here
-unchanged from `ha-config/scripts/` in session 20; until each live repository
-syncs the core, its own copy stays and works the same way. The examples below
-use the `pa-agent-kit` path; any copy of the script serves any repository.
+The script is part of the harness core. The examples below run from the root of
+a repository that syncs the core, where it is `.harness/gh-token.sh`; in the
+workshop (`pa-agent-kit`) the same script is `harness/gh-token.sh`. It moved
+from `ha-config/scripts/` in session 20; until each live repository syncs the
+core, its own copy stays (with the old `pa` mode).
 
 ## What each identity can do
 
 | Identity | Rights | Lifetime | Released by |
 |---|---|---|---|
 | `<app>[bot]` (claude, codex, antigravity) | Contents, Pull requests, Issues: read and write. Actions, Checks, Commit statuses, Dependabot alerts, Code scanning alerts, Code quality: read. No Workflows, no Administration, no Secret scanning alerts, no Actions write | One hour, one repository, revoked when the wrapped command ends | The App key in the Keychain, no prompt |
-| PA | Everything PA's token carries (merge, settings, workflow files, direct push to `main`) | The one wrapped command | Keychain prompt on every read |
+| owner (PA) | Everything PA's token carries (merge, settings, workflow files, direct push to `main`) | The one wrapped command | Keychain prompt on every read |
 
 A bot cannot push a change to `.github/workflows/` (no Workflows permission;
 GitHub rejects the push, tested 2026-11-13). Contents write still lets a bot
 merge a PR or push to `main` on Free private repositories: agents must not, PA
-merges, and the deploy wrapper's "PR merged by PA" check is what keeps such a
-commit off the house.
+merges, and the guard refuses both early.
 
 Read back an App's real permissions after any change on its settings page:
 
 ```bash
-~/Developer/pa-agent-kit/harness/gh-token.sh claude --info
+.harness/gh-token.sh claude --info
 ```
 
 ## Run a command as an agent
 
+One command per call; a push and a PR creation are two calls.
+
 ```bash
 # Current repository (from the origin remote):
-~/Developer/pa-agent-kit/harness/gh-token.sh claude -- git push -u origin my-branch
-~/Developer/pa-agent-kit/harness/gh-token.sh claude -- gh pr create --draft --fill
+.harness/gh-token.sh claude -- git commit -m "feat: ..."
+.harness/gh-token.sh claude -- git push origin HEAD:refs/heads/<branch>
+.harness/gh-token.sh claude -- gh pr create --draft --base main --head <branch> --fill
 
 # Another repository:
-~/Developer/pa-agent-kit/harness/gh-token.sh claude --repo OWNER/NAME -- gh pr create -R OWNER/NAME --fill
+.harness/gh-token.sh claude --repo OWNER/NAME -- gh pr create -R OWNER/NAME --draft --fill
+
+# Several steps under one token:
+.harness/gh-token.sh claude -- bash -c '…'
 ```
+
+Push with the explicit refspec, not `git push -u`: `-u` writes the upstream
+into `.git/config`, which the agent sandbox refuses. Commit inside the wrapper,
+so that the commit carries the bot identity.
 
 The wrapper mints a token for that one repository, sets the bot as git author
 and committer, points git and `gh` at the token (stored credentials are
 bypassed, `git@github.com:` remotes are rewritten to HTTPS), runs the command,
 then revokes the token. The revocation is an exit trap set right after the
 token is minted, so a failing command, an error of the script or Ctrl-C revoke
-it too; the command's exit status is kept. Commit inside the wrapper so the
-commit carries the bot identity:
-
-```bash
-~/Developer/pa-agent-kit/harness/gh-token.sh claude -- git commit -m "feat: ..."
-```
+it too; the command's exit status is kept.
 
 Other modes:
 
 ```bash
-gh-token.sh claude --read-only -- ./dev deploy   # every permission narrowed to read: the release gate's call
-gh-token.sh claude --info      # expiry, permissions and scope as JSON; the token is revoked, never printed
-gh-token.sh claude --print     # prints a one-hour token on stdout, for a tool that needs it raw; not revoked
+.harness/gh-token.sh claude --read-only -- ./dev deploy   # every permission narrowed to read: the release gate's call
+.harness/gh-token.sh claude --info      # expiry, permissions and scope as JSON; the token is revoked, never printed
+.harness/gh-token.sh claude --print     # prints a one-hour token on stdout, for a tool that needs it raw; not revoked
 ```
 
 With no mode (`gh-token.sh claude` alone) the script prints its usage and
@@ -67,15 +71,30 @@ finding K24). Prefer the `--` form: the token never reaches the agent's
 transcript. `--read-only` asks GitHub for every permission the installation
 holds at level read; `--info --read-only` shows the result.
 
-## Run one command as PA
+## Cleanup after a merge
+
+PA merges with a squash, so the local branch never looks merged to git, and the
+guard refuses `git branch -D`. Use `/dev-delete-merged-branches`: it runs
 
 ```bash
-~/Developer/pa-agent-kit/harness/gh-token.sh pa -- gh pr merge 123 --squash
+.harness/gh-token.sh claude -- .harness/git-prune-merged.sh <branch>
 ```
 
-macOS shows a Keychain prompt. PA clicks **Allow** (never **Always Allow**).
-Deny exits non-zero and nothing runs. Agents ask PA before running this form,
-naming the exact command; PA answers the prompt.
+which deletes the local branch (and its worktree, when clean) only when GitHub
+shows a merged PR from that branch whose last commit is exactly the local tip.
+
+## Run one command as the owner
+
+```bash
+.harness/gh-token.sh owner -- gh pr merge 123 --squash
+```
+
+`/dev-run-with-owner-token` holds the recipes. macOS shows a Keychain dialog
+for `github-owner-token`. PA clicks **Allow** (never **Always Allow**). A
+denied or closed dialog exits 1 and nothing runs; the script then says so and
+that the next step is to re-run the same command. Agents ask PA before running
+this form, naming the exact command and why; the call needs the sandbox off
+(the dialog does); PA answers the dialog.
 
 **Reach of owner mode.** The script exports PA's token (`GH_TOKEN` and the git
 credential entries) to the command and to everything that command starts, for
@@ -84,7 +103,42 @@ token, so the command must be a single, named operation (`gh pr merge 123`),
 never a shell (`bash -c …`) or a tool that runs other code (a build, a test
 suite, `./dev`).
 
-## One-time setup (PA)
+The mode was called `pa` until session 24h; `gh-token.sh pa -- …` is now
+refused with one line naming `owner`.
+
+## Owner token
+
+The owner token lives in the Keychain item `github-owner-token` (account
+`folotp`), created so that every read prompts (`-T ""`). When the item is
+missing, `gh-token.sh owner` prints this command and runs nothing. PA runs it
+once, in a terminal; with no value after `-w`, `security` prompts for the
+token, which never shows:
+
+```bash
+security add-generic-password -U -s github-owner-token -a folotp -T "" -w
+```
+
+**Moving from `github-pa-token` (once, after the session-24h merge).** The item
+had another name before. The safest move that does not regenerate the token
+copies the value from one `security` process to the other, in PA's own
+terminal: the old item's dialog appears once (Allow); the value never reaches
+the screen, the clipboard, a file or the shell history (the history keeps the
+`$(…)` text, not the value); it is an argument of the second process while it
+runs (a fraction of a second, visible to PA's own processes only). No agent
+runs it.
+
+```bash
+security add-generic-password -U -s github-owner-token -a folotp -T "" \
+  -w "$(security find-generic-password -s github-pa-token -a folotp -w)"
+security delete-generic-password -s github-pa-token -a folotp
+```
+
+To avoid even that argument, generate a new token on GitHub instead, type it at
+the prompt of the first command above, then revoke the old token on GitHub and
+delete the old item with the second line. Then check, as PA (one dialog):
+`.harness/gh-token.sh owner -- gh api user --jq .login` prints `folotp`.
+
+## One-time setup of the App keys (PA)
 
 Agent App keys, one Keychain item each, readable without a prompt:
 
@@ -94,13 +148,6 @@ security add-generic-password -U -s github-app-key -a claude -T /usr/bin/securit
 rm -P ~/Downloads/<app-slug>.<date>.private-key.pem
 ```
 
-PA's token, prompting on every read (`-T ""`). With no value after `-w`,
-`security` asks for the token instead of taking it on the command line:
-
-```bash
-security add-generic-password -U -s github-pa-token -a folotp -T "" -w
-```
-
 Client IDs are recorded in `app_client_id()` in the script (public values from
 each App's settings page).
 
@@ -108,11 +155,13 @@ each App's settings page).
 
 Errors print the failing step, the HTTP status and GitHub's message, never a
 key or a token. Common causes: no Keychain item for the App; the App is not
-installed on the repository (HTTP 404 on `/repos/OWNER/NAME/installation`); the
-Keychain prompt denied.
+installed on the repository (HTTP 404 on `/repos/OWNER/NAME/installation`); for
+the owner mode, a missing `github-owner-token` item or a denied dialog (each
+ends with `done:`, `left for PA:` and `next:` lines).
 
 ## Renewal
 
 App keys do not expire. Rotate one by generating a new key on the App page,
 storing it with the same command (`-U` updates the item), then deleting the old
-key on GitHub.
+key on GitHub. The owner token is renewed the same way: the prompting command
+of 'Owner token' with `-U` replaces the value.

@@ -1,0 +1,5 @@
+interface:
+  display_name: "Check release readiness"
+  short_description: "Can this commit be released? The gate's checks"
+policy:
+  allow_implicit_invocation: false

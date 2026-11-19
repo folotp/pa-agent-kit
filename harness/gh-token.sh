@@ -14,14 +14,17 @@
 # A token minted for --info or -- CMD is revoked by an exit trap set right
 # after minting, so an error or Ctrl-C revokes it too. A --print token is
 # the caller's, never revoked here: it expires within the hour.
-# Owner mode (pa -- CMD) exports PA's token to CMD and everything CMD
+# Owner mode (owner -- CMD) exports PA's token to CMD and everything CMD
 # starts, for as long as they run; nothing here can narrow or revoke it.
+# The mode was called `pa` until session 24h (row C6 of 24g); `pa` is now
+# refused with one line naming `owner`, and the Keychain item moved from
+# github-pa-token to github-owner-token (PA re-creates it once).
 set -euo pipefail
 
 readonly API="https://api.github.com"
 readonly KEY_SERVICE="github-app-key"     # Keychain: one item per App, account = <app>, base64 PEM
-readonly PA_SERVICE="github-pa-token"     # Keychain: PA's token, created with -T "" (prompts on read)
-readonly PA_ACCOUNT="folotp"
+readonly OWNER_SERVICE="github-owner-token"  # Keychain: PA's token, created with -T "" (prompts on read)
+readonly OWNER_ACCOUNT="folotp"               # PA's GitHub account, the owner of every repository
 
 # Client IDs are public identifiers (shown on each App's settings page),
 # used as the JWT issuer. They are not secrets.
@@ -34,7 +37,15 @@ app_client_id() {
   esac
 }
 
-die() { printf 'gh-token: %s\n' "$*" >&2; exit 1; }
+# A refusal: the reason, then what happened, what is left for PA and the next step (24i's output
+# rule), on stderr. Nothing was run by the script when it refuses.
+die() {
+  printf 'gh-token: %s\n' "$*" >&2
+  # A failed revocation (revoke_minted) comes after the command ran: its own line says enough.
+  [[ -z ${revoking:-} ]] || exit 1
+  printf 'done: refused; the command did not run\nleft for PA: nothing, unless the line above names a Keychain item or an App setting (gh-token.md)\nnext: fix what the line above names, then re-run the same command\n' >&2
+  exit 1
+}
 
 usage() {
   cat >&2 <<'EOF'
@@ -42,7 +53,7 @@ Usage:
   gh-token.sh <app> [--repo OWNER/NAME] [--read-only] -- CMD...  run CMD as the bot, then revoke
   gh-token.sh <app> [--repo OWNER/NAME] [--read-only] --info     print expiry and scope, no token
   gh-token.sh <app> [--repo OWNER/NAME] [--read-only] --print    print a token on stdout (never revoked here)
-  gh-token.sh pa -- CMD...                         run CMD with PA's token (prompts)
+  gh-token.sh owner -- CMD...                      run CMD with PA's token (prompts)
 
 <app> is one of: claude, codex, antigravity.
 --repo defaults to the origin remote of the current directory.
@@ -56,7 +67,7 @@ minted_token=""
 revoke_minted() {
   [[ -n $minted_token ]] || return 0
   # In a subshell: a failed request (api dies) must not replace the command's exit status.
-  (api DELETE /installation/token token "$minted_token" >/dev/null) ||
+  (revoking=1; api DELETE /installation/token token "$minted_token" >/dev/null) ||
     printf 'gh-token: revoke failed; the token expires within the hour\n' >&2
   minted_token=""
 }
@@ -133,12 +144,31 @@ token_request() {
   fi
 }
 
-run_as_pa() {
+# The command PA runs once, in a terminal, to create the owner item: `-w` last prompts for the
+# token, which never shows; `-T ""` makes every later read prompt (Allow, never Always Allow).
+owner_item_command() {
+  printf 'security add-generic-password -U -s %s -a %s -T "" -w' "$OWNER_SERVICE" "$OWNER_ACCOUNT"
+}
+
+# A refusal of owner mode: what happened, what is left for PA, the next step (24i's output rule),
+# on stderr, then exit 1. Nothing ran.
+owner_refusal() {
+  printf 'gh-token: %s\ndone: nothing ran\nleft for PA: %s\nnext: re-run the same command\n' "$1" "$2" >&2
+  exit 1
+}
+
+run_as_owner() {
   local token
-  [[ $# -gt 0 ]] || die "pa needs a command after --"
-  printf 'gh-token: releasing PA'"'"'s token for one command: %s\n' "$*" >&2
-  token=$(security find-generic-password -s "$PA_SERVICE" -a "$PA_ACCOUNT" -w 2>/dev/null) \
-    || die "PA's token was not released (prompt denied, or no Keychain item $PA_SERVICE)"
+  [[ $# -gt 0 ]] || die "owner needs a command after --"
+  # The item's attributes only (no -w): this read shows no dialog and returns no secret, so a
+  # missing item is told apart from a denied dialog.
+  security find-generic-password -s "$OWNER_SERVICE" -a "$OWNER_ACCOUNT" >/dev/null 2>&1 ||
+    owner_refusal "no Keychain item $OWNER_SERVICE for $OWNER_ACCOUNT" \
+      "create it once in your own terminal, typing the token at its prompt: $(owner_item_command) (gh-token.md, 'Owner token')"
+  printf 'gh-token: releasing the owner token for one command: %s\n' "$*" >&2
+  token=$(security find-generic-password -s "$OWNER_SERVICE" -a "$OWNER_ACCOUNT" -w 2>/dev/null) ||
+    owner_refusal "the owner token was not released: the Keychain dialog was denied or closed" \
+      "click Allow (never Always Allow) in the dialog for $OWNER_SERVICE"
   export_git_auth "$token"
   unset token
   exec "$@"
@@ -150,10 +180,15 @@ main() {
   local repo="" mode="" read_only=""
   case $app in -h|--help) usage ;; esac
 
+  # Renamed in session 24h (24g C6), with no alias: one line names the new mode.
   if [[ $app == pa ]]; then
-    [[ ${1:-} == -- ]] || die "usage: gh-token.sh pa -- CMD..."
+    printf 'gh-token: the pa mode is now owner: run gh-token.sh owner -- CMD (Keychain item %s, see gh-token.md)\n' "$OWNER_SERVICE" >&2
+    exit 1
+  fi
+  if [[ $app == owner ]]; then
+    [[ ${1:-} == -- ]] || die "usage: gh-token.sh owner -- CMD..."
     shift
-    run_as_pa "$@"
+    run_as_owner "$@"
   fi
 
   while [[ $# -gt 0 ]]; do

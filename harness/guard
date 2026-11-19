@@ -9,9 +9,13 @@
 #   - always: a push to main or master, a push of every branch or of a wildcard refspec, a force
 #     push, a remote branch deletion, a git hook skipped (--no-verify, commit -n, -c
 #     core.hooksPath=), a git alias defined on the command line, a PR merged, marked ready or set
-#     to auto-merge (PA's actions), a release created or edited other than as a draft;
+#     to auto-merge (PA's actions), a release created or edited other than as a draft, a local
+#     branch deleted by force (`git branch -D`, `-d -f`, `--delete --force`: nothing checked that
+#     it was merged; the core's prune script deletes only what GitHub shows merged);
 #   - where nobody answers a prompt (a Claude Code cloud session, a permission mode that does not
 #     ask, or a mode the hook cannot see): the release verbs, `./dev apply` and `./dev deploy`.
+# Each denial names the sanctioned way instead (24i's refusal rule): a `/dev-` command or the exact
+# command to run, so that an agent never has to guess and never retries the refusal another way.
 # Anything else passes. Patterns are matched on the command text after shell quoting is removed,
 # so a commit message quoting a denied command is denied too: reword it. Variables, aliases and
 # functions defined elsewhere, and interpreters (python -c, …), are not seen.
@@ -26,6 +30,11 @@ LC_ALL=C
 
 agent="${1:-}"
 
+# The core directory this guard runs from (`.harness` in a consumer, `harness` in the workshop):
+# messages name the token script by the path the agent can run.
+core="$(basename "$(dirname "$0")")"
+case "$core" in harness | .harness) ;; *) core=.harness ;; esac
+
 # Claude Code and Codex deny on exit 2 with the reason on stderr; Antigravity reads a decision on
 # stdout. Reasons hold no double quote or backslash, so they need no JSON escaping.
 deny() {
@@ -38,20 +47,20 @@ deny() {
 }
 
 IFS= read -r -d '' payload || true
-command -v jq >/dev/null 2>&1 || deny "jq is missing, so the guard cannot read the call"
+command -v jq >/dev/null 2>&1 || deny "jq is missing, so the guard cannot read the call: install jq (\`./dev setup\` checks the tools), then retry"
 
 case "$agent" in
   claude | codex)
-    tool="$(printf '%s' "$payload" | jq -er '.tool_name | strings' 2>/dev/null)" || deny "cannot read the hook payload"
+    tool="$(printf '%s' "$payload" | jq -er '.tool_name | strings' 2>/dev/null)" || deny "cannot read the hook payload: run \`./dev setup\` (it checks the guard and its tools), then retry"
     cmd_path='.tool_input.command'
-    mode="$(printf '%s' "$payload" | jq -r '.permission_mode // "" | strings' 2>/dev/null)" || deny "cannot read the hook payload"
+    mode="$(printf '%s' "$payload" | jq -r '.permission_mode // "" | strings' 2>/dev/null)" || deny "cannot read the hook payload: run \`./dev setup\` (it checks the guard and its tools), then retry"
     ;;
   antigravity)
-    tool="$(printf '%s' "$payload" | jq -er '.toolCall.name | strings' 2>/dev/null)" || deny "cannot read the hook payload"
+    tool="$(printf '%s' "$payload" | jq -er '.toolCall.name | strings' 2>/dev/null)" || deny "cannot read the hook payload: run \`./dev setup\` (it checks the guard and its tools), then retry"
     cmd_path='.toolCall.args.CommandLine'
     mode=""
     ;;
-  *) deny "unknown agent '$agent' (claude, codex or antigravity)" ;;
+  *) deny "unknown agent '$agent' (claude, codex or antigravity): the hook binding is wrong; \`./dev check\` names the entry to merge from $core/bindings/" ;;
 esac
 
 # Only shell commands are judged. apply_patch (Codex) carries a patch in .tool_input.command.
@@ -60,12 +69,12 @@ case "$tool" in Bash | shell | exec_command | local_shell | run_command) ;; *) e
 # A judged command that is present but not a string (an array, a number, an object) denies: the
 # agent may still run it, and the guard cannot say what it is.
 cmd="$(printf '%s' "$payload" | jq -r "$cmd_path"' | if . == null then "" elif type == "string" then . else error("not a string") end' 2>/dev/null)" ||
-  deny "cannot read the hook payload: the command is not a string"
+  deny "cannot read the hook payload: the command is not a string; send it as one command string, or tell PA if the client cannot (\`./dev check\` checks the hook bindings)"
 [ -n "$cmd" ] || exit 0
 
 # A hook that runs past its timeout lets the call through in the agents, so a command too long to
 # judge quickly denies instead (session 24b: about 0.3 s per 50 KB here; the bindings allow 10 s).
-[ "${#cmd}" -le 200000 ] || deny "the command is too long for the guard to judge in time: split it"
+[ "${#cmd}" -le 200000 ] || deny "the command is too long for the guard to judge in time: split it, or put its payload in a file (\`git commit -F <file>\`, \`gh pr create --body-file <file>\`)"
 
 # The command is judged in two views; a denial in either denies. jq builds both, one character at
 # a time with foreach, which is linear. Measured in session 24b: bash 3.2's ${var//…} is
@@ -162,6 +171,14 @@ gh="${sep}gh${flags}[[:space:]]+"
 git_re="${sep}git[[:space:]]"
 push_re="${sep}git[[:space:]]+([^[:space:]]+[[:space:]]+)*push${end}"
 commit_re="${sep}git[[:space:]]+([^[:space:]]+[[:space:]]+)*commit${end}"
+branch_re="${sep}git[[:space:]]+([^[:space:]]+[[:space:]]+)*branch${end}"
+# git branch deleting by force: a short-flag cluster holding D (`-D`, `-vD`), or a delete flag and
+# a force flag in any order and form (`-df`, `-d -f`, `--delete --force`, `--force -d`; git takes
+# a unique prefix of a long option: `--d…` is --delete, `--forc…` --force, `--for` is ambiguous
+# with --format). The value of -u is not a cluster; `-m`, `-M`, `-c`, `-C`, `--list` never delete.
+branch_D_re="[[:space:]]-[^-[:space:]u=]*D"
+branch_delete_re="[[:space:]](-[^-[:space:]u=]*d|--d[a-z]*${end})"
+branch_force_re="[[:space:]](-[^-[:space:]u=]*f|--forc[a-z]*${end})"
 main_re="[[:space:]:+](refs/heads/)?(main|master)${end}"
 # --force, --mirror, --all, --delete, --prune and their abbreviations (git accepts a unique prefix
 # of a long option); a short-flag cluster holding f or d before the value-taking -o (`-fu`); a
@@ -193,36 +210,39 @@ while IFS= read -r part; do
     continue
   fi
   if [ -n "$unattended" ] && { [[ "$part" =~ $release_re ]] || [[ "$part" =~ $gate_re ]]; }; then
-    deny "the release verbs are not available in $unattended: run ./dev apply or ./dev deploy in your own terminal"
+    deny "the release verbs are not available in $unattended: PA runs them in a terminal; tell PA, who runs /dev-check-release-readiness, then the command it prints"
   fi
-  [[ ! "$part" =~ $mutation_re ]] || deny "PA merges PRs and marks them ready"
+  [[ ! "$part" =~ $mutation_re ]] || deny "PA merges PRs and marks them ready: tell PA the PR number; /dev-status lists it"
   if [[ "$part" =~ $git_re ]]; then
-    [[ "$part" != *--no-veri* ]] || deny "--no-verify skips the git hooks"
+    [[ "$part" != *--no-veri* ]] || deny "--no-verify skips the git hooks: fix what the hook reports; /dev-run-ci-locally runs the same checks"
     shopt -s nocasematch
     if [[ "$part" =~ $config_re ]]; then
       shopt -u nocasematch
-      deny "git -c alias.* and -c core.hooksPath are refused: an alias hides the verb, hooksPath skips the hooks"
+      deny "git -c alias.* and -c core.hooksPath are refused: an alias hides the verb, hooksPath skips the hooks; run the plain git command, and fix what a hook reports with /dev-run-ci-locally"
     fi
     shopt -u nocasematch
   fi
   if [[ "$part" =~ $commit_re ]] && [[ "$part" =~ $commit_n_re ]]; then
-    deny "git commit -n is --no-verify: it skips the git hooks"
+    deny "git commit -n is --no-verify: it skips the git hooks; fix what the hook reports, /dev-run-ci-locally runs the same checks"
   fi
   if [[ "$part" =~ $push_re ]]; then
-    [[ ! "$part" =~ $main_re ]] || deny "pushes to main go through a PR that PA merges"
-    [[ ! "$part" =~ $force_re ]] || deny "force pushes, pushes of every branch and remote branch deletions are PA's"
+    [[ ! "$part" =~ $main_re ]] || deny "pushes to main go through a PR that PA merges: push a branch and open a draft PR as your bot (\`$core/gh-token.sh <bot> -- git push origin HEAD:refs/heads/<branch>\`, then \`gh pr create --draft\` through the same script)"
+    [[ ! "$part" =~ $force_re ]] || deny "force pushes, pushes of every branch and remote branch deletions are PA's: say why to PA, who decides; a merged branch is cleaned up with /dev-delete-merged-branches"
   fi
-  [[ ! "$part" =~ $merge_re ]] || deny "PA merges PRs and marks them ready"
+  if [[ "$part" =~ $branch_re ]] && { [[ "$part" =~ $branch_D_re ]] || { [[ "$part" =~ $branch_delete_re ]] && [[ "$part" =~ $branch_force_re ]]; }; }; then
+    deny "git branch -D deletes a branch without checking that it was merged: use /dev-delete-merged-branches (checks that GitHub shows the merge); git branch -d stays allowed"
+  fi
+  [[ ! "$part" =~ $merge_re ]] || deny "PA merges PRs and marks them ready: tell PA the PR number; /dev-status lists it"
   if [[ "$part" =~ $release_create_re ]] || [[ "$part" =~ $release_edit_re ]] || [[ "$part" =~ $api_release_re ]]; then
-    [[ ! "$part" =~ $undraft_re ]] || deny "releases stay drafts: PA publishes them"
+    [[ ! "$part" =~ $undraft_re ]] || deny "releases stay drafts: PA publishes them, with /dev-plugin-release in the workshop or /dev-run-with-owner-token elsewhere"
   fi
   if [[ "$part" =~ $release_create_re ]] && [[ ! "$part" =~ $draft_re ]]; then
-    deny "releases stay drafts: create them with --draft, PA publishes them"
+    deny "releases stay drafts: create them with --draft; PA publishes them, with /dev-plugin-release in the workshop or /dev-run-with-owner-token elsewhere"
   fi
   if [[ "$part" =~ $api_release_re ]] && [[ "$part" =~ $api_write_re ]] && [[ "$part" != *draft=true* ]]; then
-    deny "releases stay drafts: a release written through gh api needs draft=true, PA publishes them"
+    deny "releases stay drafts: a release written through gh api needs draft=true; PA publishes them, with /dev-plugin-release in the workshop or /dev-run-with-owner-token elsewhere"
   fi
 done < <(printf '%s' "$cmd" | jq -Rrs "$views" 2>/dev/null)
-[ -n "$complete" ] || deny "cannot split the command into simple commands"
+[ -n "$complete" ] || deny "cannot split the command into simple commands: run \`./dev setup\` (it checks jq), then retry, or split the command"
 
 exit 0

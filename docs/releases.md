@@ -5,11 +5,11 @@
 Merging a version bump is the release, in two steps: the merge, then PA's tag. Only PA can create a `*/v*` tag (session 25): a tag ruleset on `*/v*`, `harness-v*` and `stable` restricts creating, moving and deleting them, with the repository admin role as the only bypass. GitHub refuses the GitHub Actions App as a bypass actor on a personal repository, so the workflow cannot tag; it drafts the release of a tag PA pushes.
 
 1. Bump the plugin's `version` in its `plugin.json` (`/bump-plugin <name> <version>` also updates the README table) and merge the PR (code-owner review: PA approves).
-2. PA tags the bump commit with PA's own token, by running [`scripts/tag-release.py`](../scripts/tag-release.py) through the token wrapper (an agent may run it too; PA clicks Allow on the Keychain dialog):
+2. PA tags the bump commit with PA's own token, by running [`scripts/tag-release.py`](../scripts/tag-release.py) through the token wrapper (an agent may run it too; PA clicks Allow on the Keychain dialog for `github-owner-token`; `/dev-run-with-owner-token` holds this recipe):
 
    ```text
-   harness/gh-token.sh pa -- python3 scripts/tag-release.py <plugin> --dry-run
-   harness/gh-token.sh pa -- python3 scripts/tag-release.py <plugin>
+   harness/gh-token.sh owner -- python3 scripts/tag-release.py <plugin> --dry-run
+   harness/gh-token.sh owner -- python3 scripts/tag-release.py <plugin>
    ```
 
    The script fetches, reads the plugin's version at `origin/main`, finds the commit that bumped it (the latest commit on `main` touching `plugins/<plugin>/`; it refuses when that commit did not change the version), refuses a tag that exists locally or on the remote, and pushes `<plugin>/v<version>` on that commit. It tags the bump commit, not the tip of `main`, so another plugin's merge in between does not move the tag. Without the wrapper the push is refused by the tag ruleset. By hand, the same thing is `git fetch origin && git tag <plugin>/v<version> <bump commit> && git push origin refs/tags/<plugin>/v<version>`.

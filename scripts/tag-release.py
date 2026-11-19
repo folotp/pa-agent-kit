@@ -6,7 +6,7 @@ Merging a version bump is the release in two parts (docs/releases.md): PA pushes
 script is PA's half, replacing the hand-typed `git fetch && git tag && git push`. Only PA
 can create a `*/v*` tag (tag ruleset, session 25), so run it under PA's token:
 
-    harness/gh-token.sh pa -- python3 scripts/tag-release.py <plugin>
+    harness/gh-token.sh owner -- python3 scripts/tag-release.py <plugin>
 
 What it does, in order, and where it stops:
   1. fetches `<remote>` (default `origin`), branch `main` and tags: read-only;

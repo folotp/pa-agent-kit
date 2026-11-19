@@ -1,0 +1,3 @@
+interface:
+  display_name: "Run CI locally"
+  short_description: "./dev check, then ./dev ci"

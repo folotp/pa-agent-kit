@@ -2,7 +2,7 @@
 # dev: the core dispatcher. Every verb runs under `mise exec`, so tools come from the pinned
 # versions in mise.toml and never from the shell. Contract and rules: docs/harness-core.md.
 #
-# Usage: ./dev setup | check | ci | gate [<sha>] | apply|deploy [args…] | x <command…> | <verb> [args…]
+# Usage: ./dev setup | check | ci | update-local-repo | gate [<sha>] | apply|deploy [args…] | x <command…> | <verb> [args…]
 # `gate` and the release verb (`apply` or `deploy`, named in harness.toml) belong to harness/gate.
 #
 # Layout: this file is <root>/harness/dev (or <root>/.harness/dev in a repository that syncs the
@@ -14,9 +14,21 @@ self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]
 root="$(cd "$(dirname "$self")/.." && pwd)"
 cd "$root"
 
+# Every verb ends with what happened, what is left for PA and the one next step (24i's output
+# rule: `done:`, `left for PA:`, `next:`), on success and on refusal, so that nobody has to work
+# out what to run next. A `/dev-` command is named where one exists.
+#
+# die MESSAGE [NEXT [LEFT]]: the refusal line, then the three lines on stderr; nothing changed.
 die() {
-  echo "dev: $*" >&2
+  echo "dev: $1" >&2
+  printf 'done: refused; nothing changed\nleft for PA: %s\nnext: %s\n' "${3:-nothing}" \
+    "${2:-fix what the line above names, then run the same ./dev command again}" >&2
   exit 1
+}
+
+# ending DONE LEFT NEXT: the three lines of a verb that succeeded, on stdout.
+ending() {
+  printf 'done: %s\nleft for PA: %s\nnext: %s\n' "$1" "$2" "$3"
 }
 
 # mise by PATH first, then its usual install locations: hooks, scheduled jobs and cloud sessions
@@ -37,7 +49,8 @@ find_mise() {
 }
 
 mise_bin="$(find_mise)" ||
-  die "mise not found (PATH, /opt/homebrew/bin, /usr/local/bin, ~/.local/bin). Install mise, then run ./dev setup. A cloud session ships without mise and installs nothing by itself: see docs/harness-core.md, 'Cloud sessions'."
+  die "mise not found (PATH, /opt/homebrew/bin, /usr/local/bin, ~/.local/bin). A cloud session ships without mise and installs nothing by itself: see $(basename "$(dirname "$self")")/README.md, 'Cloud sessions'." \
+    "install mise with its official installer, then ./dev setup" "install mise on this machine, then run ./dev setup in your own terminal"
 
 # The core's git hooks (pre-commit, pre-push), relative to the work tree so that every worktree
 # uses its own checkout's copy: harness/githooks in the workshop, .harness/githooks in a consumer.
@@ -47,12 +60,70 @@ hooks_path="$(basename "$(dirname "$self")")/githooks"
 # tools, and the git hooks (core.hooksPath, written only when it differs: the agent sandbox cannot
 # write .git/config, so PA runs setup in a terminal).
 if [ "${1:-}" = "setup" ]; then
-  [ "$#" -eq 1 ] || die "usage: ./dev setup"
+  [ "$#" -eq 1 ] || die "usage: ./dev setup" "./dev setup"
   "$mise_bin" install --locked
   if [ "$(git config --get core.hooksPath || true)" != "$hooks_path" ]; then
-    git config core.hooksPath "$hooks_path" || die "cannot set core.hooksPath to $hooks_path (run ./dev setup in your own terminal)"
+    git config core.hooksPath "$hooks_path" ||
+      die "cannot set core.hooksPath to $hooks_path (the agent sandbox cannot write .git/config)" "./dev setup, in PA's own terminal" "run ./dev setup in your own terminal"
   fi
   exec "$self" check
+fi
+
+# `update-local-repo` (24i row I5d, the skill /dev-update-local-repo): bring the main checkout's
+# `main` up to GitHub's, then reinstall and prune. Steps: refuse, changing nothing, when the main
+# checkout (the first `git worktree list` entry) is not on main, has uncommitted or untracked
+# files, or its main has commits origin/main lacks after the fetch; fetch; fast-forward main
+# (`pull --ff-only`, from the fetched ref); `./dev setup` (tools, hooks, then check); prune merged
+# branches with the prune script's --all when a bot token is in GH_TOKEN (the skill runs this verb
+# under `gh-token.sh <bot> --`); without one it says so and names /dev-delete-merged-branches.
+# A restart is asked for only when the pull changed agent files or plugins. Idempotent: a second
+# run fast-forwards nothing and says "already up to date". Runs before the mise re-run below, so a
+# pull that changes mise.lock is installed by setup rather than refused by `mise exec --locked`.
+update_local_repo() {
+  local main_wt before after count changed setup_out prune_out prune_done="" left="nothing" agent_paths
+  [ "$#" -eq 0 ] || die "usage: ./dev update-local-repo" "/dev-update-local-repo"
+  main_wt="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
+  { [ -n "$main_wt" ] && cd "$main_wt"; } || die "cannot find the main checkout" "/dev-update-local-repo"
+  [ "$(git symbolic-ref -q --short HEAD || true)" = main ] ||
+    die "the main checkout $main_wt is not on main" "git -C $main_wt switch main, then /dev-update-local-repo"
+  [ -z "$(git status --porcelain)" ] ||
+    die "the main checkout $main_wt has uncommitted or untracked files" "commit them on a branch or remove them, then /dev-update-local-repo" "decide what to keep of the changes in $main_wt"
+  git fetch --quiet origin || die "git fetch origin failed (line above)" "check the network and the remote, then /dev-update-local-repo"
+  count="$(git rev-list --count origin/main..main)"
+  [ "$count" = 0 ] ||
+    die "local main has $count commit(s) that origin/main lacks: they would be lost or merged" "git log origin/main..main, then move them to a branch" "decide what happens to those commits"
+  before="$(git rev-parse HEAD)"
+  git merge --ff-only --quiet origin/main || die "the fast-forward of main failed (line above)" "/dev-update-local-repo"
+  after="$(git rev-parse HEAD)"
+  if [ "$before" = "$after" ]; then
+    changed="already up to date at ${after:0:7}"
+  else
+    changed="main fast-forwarded ${before:0:7}..${after:0:7} ($(git rev-list --count "$before..$after") commit(s))"
+    agent_paths="$(git diff --name-only "$before" "$after" -- AGENTS.md CLAUDE.md .claude .agents .codex .harness/skills harness/skills plugins .claude-plugin | head -1)"
+    [ -z "$agent_paths" ] || left="restart the agent session (in Claude Code, /reload-plugins is enough for plugins): agent files or plugins changed"
+  fi
+  echo "update-local-repo: $changed"
+  setup_out="$("$main_wt/$(basename "$(dirname "$self")")/dev" setup 2>&1)" || {
+    printf '%s\n' "$setup_out" >&2
+    die "./dev setup failed after the pull (lines above); main stays at ${after:0:7}" "fix what it reports, then ./dev setup" "${left/#nothing/run ./dev setup once it is fixed}"
+  }
+  echo "update-local-repo: ./dev setup passed"
+  if [ -n "${GH_TOKEN:-}" ]; then
+    prune_out="$("$(dirname "$self")/git-prune-merged.sh" --all 2>&1)" || true
+    printf '%s\n' "$prune_out" | grep -v -e '^done: ' -e '^left for PA: ' -e '^next: ' || true
+    prune_done="$(printf '%s\n' "$prune_out" | sed -n 's/^done: //p')"
+    case "$prune_out" in
+      *"KEEP "*) if [ "$left" = nothing ]; then left="decide each KEEP line above"; else left="$left; decide each KEEP line above"; fi ;;
+    esac
+    ending "$changed; setup passed; branches: ${prune_done:-not checked}" "$left" "/dev-status"
+  else
+    ending "$changed; setup passed; merged branches not checked (no bot token in GH_TOKEN)" "$left" "/dev-delete-merged-branches --all (it runs as your bot)"
+  fi
+  exit 0
+}
+if [ "${1:-}" = "update-local-repo" ]; then
+  shift
+  update_local_repo "$@"
 fi
 
 # The release verbs re-run themselves from a clean environment (harness/gate). They are handed
@@ -105,10 +176,10 @@ EOF
 # Fails closed: every tool named in harness.toml must resolve into a directory that mise manages.
 verify_tools() {
   local dirs t p d found
-  dirs="$("$mise_bin" bin-paths)" || die "mise cannot list its tool directories (run ./dev setup)"
-  [ -n "$dirs" ] || die "mise has no tools installed (run ./dev setup)"
+  dirs="$("$mise_bin" bin-paths)" || die "mise cannot list its tool directories" "./dev setup, in PA's own terminal" "run ./dev setup in your own terminal"
+  [ -n "$dirs" ] || die "mise has no tools installed" "./dev setup, in PA's own terminal" "run ./dev setup in your own terminal"
   for t in $tools; do
-    p="$(command -v "$t" 2>/dev/null)" || die "$t not found under mise (run ./dev setup)"
+    p="$(command -v "$t" 2>/dev/null)" || die "$t not found under mise" "./dev setup, in PA's own terminal" "run ./dev setup in your own terminal"
     found=""
     while IFS= read -r d; do
       [ -n "$d" ] || continue
@@ -116,7 +187,7 @@ verify_tools() {
     done <<EOF
 $dirs
 EOF
-    [ -n "$found" ] || die "$t resolved outside mise: $p"
+    [ -n "$found" ] || die "$t resolved outside mise: $p" "./dev setup, in PA's own terminal (mise.toml pins $t)" "run ./dev setup in your own terminal"
   done
 }
 
@@ -127,12 +198,12 @@ EOF
 # change the file and its checksum together.
 verify_core() {
   [ -d .harness ] || return 0
-  [ -f .harness/CHECKSUMS ] || die ".harness/CHECKSUMS is missing: re-sync the core (./dev sync in the workshop)"
+  [ -f .harness/CHECKSUMS ] || die ".harness/CHECKSUMS is missing" "/dev-harness-sync (re-sync the core)"
   local sum mode hash path f bad="" listed present
   if command -v sha256sum >/dev/null 2>&1; then sum="sha256sum"; else sum="shasum -a 256"; fi
   while read -r mode hash path; do
     [[ "$mode" =~ ^(644|755)$ && "$hash" =~ ^[0-9a-f]{64}$ && "$path" =~ ^[A-Za-z0-9._/-]+$ ]] ||
-      die ".harness/CHECKSUMS has a malformed line (mode sha256 path expected): re-sync the core"
+      die ".harness/CHECKSUMS has a malformed line (mode sha256 path expected)" "/dev-harness-sync (re-sync the core)"
     f=".harness/$path"
     if [ ! -f "$f" ] || [ -L "$f" ]; then
       bad="$bad $path (missing)"
@@ -141,10 +212,10 @@ verify_core() {
     [ "$($sum "$f" | awk '{print $1}')" = "$hash" ] || bad="$bad $path (content)"
     if [ "$mode" = 755 ]; then [ -x "$f" ] || bad="$bad $path (mode)"; else [ ! -x "$f" ] || bad="$bad $path (mode)"; fi
   done <.harness/CHECKSUMS
-  [ -z "$bad" ] || die ".harness differs from its CHECKSUMS:$bad; re-sync the core"
+  [ -z "$bad" ] || die ".harness differs from its CHECKSUMS:$bad; never edit .harness/" "undo the edit (git checkout -- .harness), or /dev-harness-sync"
   listed="$(awk '{print $3}' .harness/CHECKSUMS | LC_ALL=C sort)"
   present="$(cd .harness && find . ! -type d ! -name CHECKSUMS | sed 's|^\./||' | LC_ALL=C sort)"
-  [ "$listed" = "$present" ] || die ".harness has files that CHECKSUMS does not list (or lacks listed ones): re-sync the core"
+  [ "$listed" = "$present" ] || die ".harness has files that CHECKSUMS does not list (or lacks listed ones)" "remove the extra file, or /dev-harness-sync"
 }
 
 # The active git hooks must be the core's (finding K14): a clone that never ran `./dev setup`, or
@@ -153,7 +224,7 @@ verify_hooks() {
   local active
   active="$(git config --get core.hooksPath || true)"
   [ "$active" = "$hooks_path" ] ||
-    die "git hooks are not the core's (core.hooksPath is '${active:-unset}', not '$hooks_path'): run ./dev setup in your own terminal"
+    die "git hooks are not the core's (core.hooksPath is '${active:-unset}', not '$hooks_path'): run ./dev setup in your own terminal" "./dev setup, in PA's own terminal" "run ./dev setup in your own terminal (the agent sandbox cannot write .git/config)"
 }
 
 # Printed by check and at the start of ci, so that every log carries the resolved versions.
@@ -164,7 +235,7 @@ print_tools() {
   printf '%-12s %s\n' profile "$profile"
   printf '%-12s %s %s\n' mise "$("$mise_bin" --version | head -1)" "$mise_bin"
   for t in $tools; do
-    version="$("$mise_bin" which "$t" --version 2>/dev/null)" || die "mise cannot tell the version of $t (run ./dev setup)"
+    version="$("$mise_bin" which "$t" --version 2>/dev/null)" || die "mise cannot tell the version of $t" "./dev setup, in PA's own terminal" "run ./dev setup in your own terminal"
     printf '%-12s %-10s %s\n' "$t" "$version" "$(command -v "$t")"
   done
 }
@@ -175,38 +246,58 @@ run_check() {
   bash -o pipefail -c "$1" </dev/null
 }
 
+# The core's own checks of the repository (24g: D1 pins, D2 Dependabot, F5 guard bindings), offline text checks next to this file.
+# Each prints one line per finding and exits non-zero; every check runs, so one pass shows all of
+# them, then any finding fails `check` and `ci`.
+core_checks() {
+  local here failed=""
+  here="$(dirname "$self")"
+  if [ -d .github ]; then
+    "$here/check-pins" || failed="$failed pins"
+    "$here/check-dependabot" || failed="$failed dependabot"
+  fi
+  "$here/skill-links" || failed="$failed skill-links"
+  "$here/check-bindings" || failed="$failed bindings"
+  [ -z "$failed" ] || die "core checks failed:$failed (each line above names the file and the fix)" "fix each line above, then ./dev check (.harness/README.md, 'Core checks')"
+  printf '%-12s %s\n' core-checks ok
+}
+
 cmd="${1:-}"
 case "$cmd" in
   check)
-    [ "$#" -eq 1 ] || die "usage: ./dev check"
+    [ "$#" -eq 1 ] || die "usage: ./dev check" "./dev check"
     verify_tools
     verify_core
     verify_hooks
     print_tools
     printf '%-12s %s\n' hooks "$hooks_path"
+    core_checks
     # The repository's own offline check (harness.toml `check`): it must contact nothing.
     if [ -n "$check_command" ]; then
-      run_check "$check_command" || die "check failed: $check_command"
+      run_check "$check_command" || die "check failed: $check_command" "fix what it reports, then /dev-run-ci-locally"
     fi
+    ending "./dev check passed" "nothing" "commit; ./dev ci before pushing (/dev-run-ci-locally)"
     ;;
   ci)
-    [ "$#" -eq 1 ] || die "usage: ./dev ci"
+    [ "$#" -eq 1 ] || die "usage: ./dev ci" "./dev ci"
     verify_tools
     verify_core
     print_tools
+    core_checks
     if [ -n "$check_command" ]; then
       echo "== check"
-      run_check "$check_command" || die "check failed: $check_command"
+      run_check "$check_command" || die "check failed: $check_command" "fix what it reports, then /dev-run-ci-locally"
     fi
     [ -n "$checks" ] || die "harness.toml: no checks"
     while IFS="$(printf '\t')" read -r name command_line; do
       [ -n "$name" ] || continue
       echo "== $name"
-      run_check "$command_line" || die "check failed: $name"
+      run_check "$command_line" || die "check failed: $name" "fix what it reports, then /dev-run-ci-locally"
     done <<EOF
 $checks
 EOF
     echo "ci: OK"
+    ending "./dev ci passed" "nothing" "push the branch as your bot: $(basename "$(dirname "$self")")/gh-token.sh <bot> -- git push origin HEAD:refs/heads/<branch>"
     ;;
   gate)
     # Read-only checks of the release gate; no credential is read.
@@ -216,7 +307,7 @@ EOF
     ;;
   x)
     shift
-    [ "$#" -gt 0 ] || die "usage: ./dev x <command…>"
+    [ "$#" -gt 0 ] || die "usage: ./dev x <command…>" "./dev x <command…>"
     verify_tools
     exec "$@"
     ;;
@@ -233,6 +324,6 @@ EOF
     done <<EOF
 $verbs
 EOF
-    die "usage: ./dev setup | check | ci | gate [<sha>] | apply|deploy [args…] | x <command…> | <verb of harness.toml> [args…]"
+    die "usage: ./dev setup | check | ci | update-local-repo | gate [<sha>] | apply|deploy [args…] | x <command…> | <verb of harness.toml> [args…]" "/dev-help (every command, with what it does)"
     ;;
 esac

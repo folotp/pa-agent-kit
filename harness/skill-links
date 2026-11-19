@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# From the repository root, check discovery links. Sync passes --install to create
+# missing links and remove retired ones. Only exact, name-matched links belong to us.
+set -euo pipefail
+mode=${1:---check}
+case "$mode" in --check|--install) ;; *) exit 2 ;; esac
+core=$(basename "$(dirname "$0")")
+status=0
+problem() {
+  printf 'skill-links: %s\n' "$1"
+  if [ "$mode" = --check ]; then status=1; fi
+}
+for parent in .agents .claude; do
+  dir="$parent/skills"
+  if [ -L "$parent" ]; then
+    problem "inspect $parent: skill discovery requires a repository directory"
+    continue
+  fi
+  if [ "$parent" = .claude ]; then
+    # The normal directory link already exposes everything installed for .agents.
+    if [ -L "$dir" ] && [ "$(readlink "$dir")" = ../.agents/skills ]; then continue; fi
+    # Older checkouts add the directory link from the sync report.
+    if [ ! -e "$dir" ] && [ ! -L "$dir" ]; then continue; fi
+  fi
+  if [ -L "$dir" ] || { [ -e "$dir" ] && [ ! -d "$dir" ]; }; then
+    problem "kept $dir: inspect its discovery path"
+    continue
+  fi
+  for source in "$core"/skills/*/SKILL.md; do
+    [ -f "$source" ] || continue
+    name=$(basename "$(dirname "$source")")
+    link="$dir/$name"
+    expected="../../$core/skills/$name"
+    if [ -L "$link" ] && [ "$(readlink "$link")" = "$expected" ]; then continue; fi
+    if [ -e "$link" ] || [ -L "$link" ]; then
+      problem "kept $link: resolve the name collision and link it to $expected"
+    elif [ "$mode" = --install ]; then
+      mkdir -p "$dir"
+      ln -s "$expected" "$link"
+      echo "linked $link -> $expected"
+    else
+      problem "missing $link: link it to $expected"
+    fi
+  done
+  for link in "$dir"/*; do
+    [ -L "$link" ] || continue
+    name=${link##*/}
+    [ "$(readlink "$link")" = "../../$core/skills/$name" ] || continue
+    [ ! -f "$core/skills/$name/SKILL.md" ] || continue
+    if [ "$mode" = --install ]; then
+      unlink "$link"
+      echo "removed retired core skill link $link"
+    else
+      problem "remove retired core skill link $link"
+    fi
+  done
+done
+exit "$status"

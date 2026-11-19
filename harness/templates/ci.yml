@@ -1,0 +1,65 @@
+# CI skeleton of the harness core (.harness/templates/ci.yml). `./dev sync` never writes it (a bot
+# cannot push a workflow file, so the sync PR would become unpushable); it reports when no workflow
+# runs `./dev ci`. To adopt it: copy it to .github/workflows/ci.yml, PA pushes that commit with the
+# owner token (/dev-run-with-owner-token), then makes `Core checks` a required check of `main`.
+#
+# One job: the pinned mise (its version and sha256 are kept equal to the workshop's validate.yml by
+# a test), `./dev setup` (the tools of mise.toml), `./dev ci` (the checks of harness.toml). No
+# write permission anywhere, and the checkout keeps no credential.
+#
+# Several jobs: keep one required check. Add a final job that needs every other job, runs whatever
+# they gave (`if: always()`), and fails unless each succeeded; make it the required check instead:
+#
+#   result:
+#     name: CI
+#     if: always()
+#     needs: [checks, other-job]
+#     runs-on: ubuntu-latest
+#     timeout-minutes: 5
+#     steps:
+#       - name: Every needed job succeeded
+#         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+#         run: exit 1
+#
+# A job skipped on purpose (a path filter) must then be judged by name instead of `skipped` (the
+# workshop's validate.yml does so).
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions: {}
+jobs:
+  checks:
+    name: Core checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      MISE_VERSION: v2026.11.9
+      # sha256 of the linux-x64 binary, from SHASUMS256.txt of the mise release
+      MISE_SHA256: f13f3e5ec88807e0161669b3aa07a91d84478cdf1e95b5b92b63f85a25d42395
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned mise
+        run: |
+          set -euo pipefail
+          curl -fsSL -o mise "https://github.com/jdx/mise/releases/download/${MISE_VERSION}/mise-${MISE_VERSION}-linux-x64"
+          echo "${MISE_SHA256}  mise" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 mise "$HOME/.local/bin/mise"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install pinned tools
+        env:
+          # Read-only job token, only to avoid GitHub API rate limits while mise downloads tools.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./dev setup
+
+      - name: ./dev ci
+        run: ./dev ci

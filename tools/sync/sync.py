@@ -15,9 +15,17 @@ What it writes in the target, on a new branch `harness-sync/<rev>`, in one commi
      `harness/bindings/` and the `CLAUDE.md` stub. The consumer's own files are never overwritten,
      but one that differs leaves part of the core unwired, so sync refuses (exit 1, nothing
      written) unless `--keep-root <file>` names it; a kept file is reported with what stays unwired.
+  2b. Starting points (STARTERS), written only where the target has none and never compared after:
+     `AGENTS.md` from `templates/AGENTS.md` (a heading and an empty marked block, filled in step 3)
+     and `.github/dependabot.yml` from `templates/dependabot.yml`. An existing one is kept and
+     reported. A `CLAUDE.md` whose first line is not `@AGENTS.md` is reported: Claude Code would
+     not read the shared block.
   3. The shared block of `AGENTS.md` (between `harness:shared:begin` and `harness:shared:end`):
      replaced when both markers are present, otherwise reported.
-  4. The `.claude/skills` symlink is only checked and reported.
+  4. Link core skills into .agents/skills and any real .claude/skills directory.
+     Report collisions, retire obsolete core links, and report a missing Claude directory link.
+  5. A CI workflow is never written (a bot cannot push one): when no workflow runs `./dev ci`, the
+     report names `templates/ci.yml` and PA's push.
 `harness.toml` and `mise.toml` belong to the consumer and are never touched.
 
 With `--pr` the branch is pushed and one PR is opened with `gh`, its body holding the report. The
@@ -125,6 +133,39 @@ def differing_roots(target, files):
     )
 
 
+# Starting points, unlike root files: written only where the target has none of the given names,
+# then the repository's own file, which it is expected to change (other ecosystems, its own rules),
+# so an existing one is never compared with the template and never refused (24g D2, F1).
+# {destination: (core template, other names that count as present, note when written, note when kept)}
+STARTERS = {
+    # Written before the shared block step below, which fills its empty marked block.
+    "AGENTS.md": (
+        "templates/AGENTS.md", (),
+        "its shared block is filled below; write the section 'This repository'",
+        "the repository's own; only its marked shared block is replaced",
+    ),
+    ".github/dependabot.yml": (
+        "templates/dependabot.yml", (".github/dependabot.yaml",),
+        "review its schedule and add the repository's other ecosystems below its entry",
+        "the repository's own; `./dev check` judges its github-actions entry (cooldown, local actions)",
+    ),
+}
+
+
+def write_when_absent(target, files):
+    """Write each starter of STARTERS the target lacks; return one report line per starter."""
+    report = []
+    for dest, (source, aliases, written, kept) in STARTERS.items():
+        present = [name for name in (dest, *aliases) if (target / name).exists()]
+        if present:
+            report.append(f"- `{present[0]}` kept as it is ({kept})")
+        else:
+            mode, data = files[source]
+            write(target / dest, data, mode)
+            report.append(f"- `{dest}` written from `.harness/{source}` (was absent): {written}")
+    return report
+
+
 def install(target, rev, commit, files, kept=()):
     """Write the target tree. Returns the report lines. `kept` are differing root files that
     the caller named with --keep-root; main() refused any other differing root file before."""
@@ -157,6 +198,8 @@ def install(target, rev, commit, files, kept=()):
                 f"- `{dest}` DIFFERS from the core template; kept by --keep-root, so {unwired(dest)} "
                 f"stays unwired (compare with `.harness/{source}`)")
 
+    report.extend(write_when_absent(target, files))
+
     agents = target / "AGENTS.md"
     template = files["templates/AGENTS.shared.md"][1].decode()
     if not agents.exists():
@@ -171,11 +214,40 @@ def install(target, rev, commit, files, kept=()):
             report.append("- `AGENTS.md`: shared block replaced")
         else:
             report.append("- `AGENTS.md`: shared block already current")
+    claude = target / "CLAUDE.md"
+    if claude.exists() and claude.read_text(encoding="utf-8").split("\n", 1)[0].strip() != "@AGENTS.md":
+        report.append("- `CLAUDE.md` does not start with `@AGENTS.md`: Claude Code does not read `AGENTS.md` (and its "
+                      "shared block) while `CLAUDE.md` exists; make `@AGENTS.md` its first line (as `.harness/templates/CLAUDE.md`)")
+
+    if "skill-links" in files:
+        links = subprocess.run([str(harness / "skill-links"), "--install"], cwd=target,
+                               capture_output=True, text=True)
+        if links.returncode:
+            raise SyncError(f"skill link installation failed: {links.stderr.strip()}")
+        report.extend(f"- {line}" for line in links.stdout.splitlines())
 
     link = target / ".claude" / "skills"
-    if not (link.is_symlink() and os.readlink(link) == "../.agents/skills"):
+    if not link.exists() and not link.is_symlink():
         report.append(f"- `.claude/skills` is not the symlink to `../.agents/skills`; not changed. To create it: `{SKILLS_COMMAND}`")
+
+    if not runs_dev_ci(target):
+        report.append(
+            "- No workflow under `.github/workflows/` runs `./dev ci`: copy `.harness/templates/ci.yml` to "
+            "`.github/workflows/ci.yml`; PA pushes that commit with the owner token (`/dev-run-with-owner-token`: "
+            "a bot cannot push a workflow file), then makes `Core checks` a required check")
     return report
+
+
+def runs_dev_ci(target):
+    """Whether a workflow of the target runs `./dev ci` (24g W6: the CI template is reported,
+    never written, because a workflow file in the sync commit would make the bot's push fail)."""
+    workflows = target / ".github" / "workflows"
+    if not workflows.is_dir():
+        return False
+    return any(
+        re.search(r"(^|\s)\./dev ci(\s|$)", path.read_text(encoding="utf-8", errors="replace"), re.M)
+        for path in workflows.iterdir() if path.suffix in (".yml", ".yaml") and path.is_file()
+    )
 
 
 def main(argv):

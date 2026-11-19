@@ -1,0 +1,3 @@
+interface:
+  display_name: "Read GitHub Actions log"
+  short_description: "Read a CI run's log as the bot"

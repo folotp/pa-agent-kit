@@ -141,5 +141,55 @@ class RevocationTest(unittest.TestCase):
         self.assertNotIn("DELETE /installation/token", self.calls())
 
 
+class OwnerModeTest(unittest.TestCase):
+    """24g C6: `owner -- CMD` with the Keychain item github-owner-token; `pa` is refused by name.
+    The Keychain is a stub function: present or not, dialog allowed or denied."""
+
+    CREATE = 'security add-generic-password -U -s github-owner-token -a folotp -T "" -w'
+
+    def owner(self, security, args="owner -- sh -c 'echo ran GH_TOKEN=$GH_TOKEN'"):
+        script = f'source "{SCRIPT}"\n{security}\nmain {args}'
+        return subprocess.run(["bash", "-c", script], env={"HOME": os.environ["HOME"], "PATH": SYSTEM_PATH},
+                              capture_output=True, text=True, timeout=30)
+
+    def test_pa_is_refused_with_one_line_naming_owner(self):
+        result = subprocess.run([str(SCRIPT), "pa", "--", "true"], env={"HOME": os.environ["HOME"], "PATH": SYSTEM_PATH},
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr.splitlines(), [
+            "gh-token: the pa mode is now owner: run gh-token.sh owner -- CMD (Keychain item github-owner-token, see gh-token.md)"])
+
+    def test_a_missing_item_prints_the_command_that_creates_it(self):
+        # Every read fails: the attribute read (no -w) finds no item, as `security` exits 44.
+        result = self.owner('security() { return 44; }')
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("ran", result.stdout)
+        lines = result.stderr.splitlines()
+        self.assertEqual(lines[0], "gh-token: no Keychain item github-owner-token for folotp")
+        self.assertEqual(lines[1], "done: nothing ran")
+        self.assertTrue(lines[2].startswith("left for PA: create it once in your own terminal") and self.CREATE in lines[2], lines[2])
+        self.assertEqual(lines[3], "next: re-run the same command")
+
+    def test_a_denied_dialog_runs_nothing_and_says_so(self):
+        # The item exists (attributes readable), but the secret read is denied at the dialog.
+        result = self.owner('security() { case " $* " in *" -w "*) return 128 ;; esac; }')
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("ran", result.stdout)
+        self.assertIn("the owner token was not released: the Keychain dialog was denied or closed", result.stderr)
+        self.assertIn("left for PA: click Allow (never Always Allow) in the dialog for github-owner-token", result.stderr)
+        self.assertTrue(result.stderr.endswith("next: re-run the same command\n"), result.stderr)
+
+    def test_a_released_token_reaches_the_command_only(self):
+        result = self.owner('security() { case " $* " in *" -w "*) printf owner-tok ;; esac; }')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "ran GH_TOKEN=owner-tok\n")
+        self.assertIn("releasing the owner token for one command", result.stderr)
+        self.assertNotIn("owner-tok", result.stderr)
+
+    def test_owner_needs_the_separator_and_a_command(self):
+        self.assertIn("usage: gh-token.sh owner -- CMD...", self.owner("security() { return 0; }", "owner true").stderr)
+        self.assertIn("owner needs a command after --", self.owner("security() { return 0; }", "owner --").stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

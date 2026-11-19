@@ -1,0 +1,5 @@
+interface:
+  display_name: "Update local repo"
+  short_description: "Pull main, set up, delete merged branches"
+policy:
+  allow_implicit_invocation: false

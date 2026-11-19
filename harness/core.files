@@ -5,8 +5,17 @@ dev
 conf.awk
 gate
 guard
+check-pins
+check-dependabot
+check-bindings
 gh-token.sh
 gh-token.md
+git-prune-merged.sh
+commands
+harness-sync
+skill-links
+skills/
+README.md
 core.files
 bindings/
 githooks/

@@ -8,7 +8,9 @@ It needs jq on the system PATH, as in a real hook.
 
 import json
 import os
+import shutil
 import subprocess
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -261,6 +263,67 @@ class GuardTest(unittest.TestCase):
         self.assertAllowed(run_guard("claude", claude(["git", "push", "origin", "main"], tool="Read")))
         self.assertAllowed(run_guard("claude", {"tool_name": "Bash", "tool_input": {}, "permission_mode": "default"}))
         self.assertAllowed(run_guard("claude", claude(None)))
+
+    # 24g I2 (24f F2): a local branch deleted by force, with nothing checking that it was merged.
+    BRANCH_FORCE_DELETES = [
+        "git branch -D feat/x",
+        "git branch -vD feat/x",
+        "git -C /tmp/r branch -D feat/x",
+        "cd /tmp && git branch -D feat/x",
+        "git branch -d -f feat/x",
+        "git branch -f -d feat/x",
+        "git branch -df feat/x",
+        "git branch -fd feat/x",
+        "git branch --delete --force feat/x",
+        "git branch --force --delete feat/x",
+        "git branch --delete -f feat/x",
+        "git branch -d --force feat/x",
+        "git branch --del --forc feat/x",
+        "'git' branch '-D' feat/x",
+        "git branch \\\n  -D feat/x",
+        "bash -c 'git branch -D feat/x'",
+    ]
+    BRANCH_PASSES = [
+        "git branch -d feat/x",
+        "git branch --delete feat/x",
+        "git branch --list",
+        "git branch --show-current",
+        "git branch -m old new",
+        "git branch -M old new",
+        "git branch -c a b",
+        "git branch -f feat origin/main",
+        "git branch -u origin/feat-d feat",
+        "git branch --format=%(refname:short) --list 'feat/*'",
+        "harness/gh-token.sh claude -- harness/git-prune-merged.sh feat/x",
+        ".harness/gh-token.sh claude -- .harness/git-prune-merged.sh feat/x",
+        ".harness/gh-token.sh claude -- .harness/git-prune-merged.sh --all",
+        ".harness/gh-token.sh codex -- .harness/git-prune-merged.sh --dry-run feat/x",
+        "git log --oneline -D",
+    ]
+
+    def test_a_forced_branch_deletion_is_denied_with_the_prune_command(self):
+        for command in self.BRANCH_FORCE_DELETES:
+            with self.subTest(command):
+                self.assertDenied(run_guard("claude", claude(command)), "/dev-delete-merged-branches")
+                self.assertDenied(run_guard("codex", claude(command, "bypassPermissions")), "/dev-delete-merged-branches")
+                self.assertDenied(run_guard("antigravity", antigravity(command)), "/dev-delete-merged-branches", "antigravity")
+
+    def test_branch_commands_that_do_not_force_a_deletion_pass(self):
+        for command in self.BRANCH_PASSES:
+            with self.subTest(command):
+                self.assertAllowed(run_guard("claude", claude(command)))
+                self.assertAllowed(run_guard("antigravity", antigravity(command)))
+
+    def test_the_push_refusal_names_the_token_script_where_it_is(self):
+        """The workshop's guard names harness/gh-token.sh, a consumer's .harness/gh-token.sh."""
+        self.assertDenied(run_guard("claude", claude("git push origin main")), "`harness/gh-token.sh <bot> -- git push origin HEAD:refs/heads/<branch>`")
+        with tempfile.TemporaryDirectory() as root:
+            copy = Path(root) / ".harness" / "guard"
+            copy.parent.mkdir()
+            shutil.copy2(GUARD, copy)
+            result = subprocess.run([str(copy), "claude"], input=json.dumps(claude("git push origin main")),
+                                    capture_output=True, text=True, env={"PATH": SYSTEM_PATH}, timeout=30)
+        self.assertDenied(result, "`.harness/gh-token.sh <bot> --")
 
 
 class BindingTest(unittest.TestCase):

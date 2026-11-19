@@ -1,0 +1,297 @@
+#!/usr/bin/env bash
+# commands: the index of dev- commands and of what waits for PA (24g row I4, 24i 'The index').
+# Core file; the skills /dev-help (list) and /dev-status (next --online) wrap it.
+#
+# Usage, from anywhere inside a repository that carries the core:
+#   commands list [--online]   every dev- command, grouped, after what waits for PA
+#   commands list --check      exit 1 on a dev- skill without a description, a name that differs
+#                              from its directory, or a name found twice (the same file reached
+#                              through two links counts once)
+#   commands next [--online]   what waits for PA, one line each with the command that does it
+#
+# Places read (by path and frontmatter only, nothing is run):
+#   Core            <core>/skills/dev-*/SKILL.md (.harness/ in a consumer, harness/ in the workshop);
+#                   a skill whose frontmatter has `metadata:` / `audience: agents` is listed under
+#                   'Used by agents' instead
+#   This repository .agents/skills/dev-*, .claude/skills/dev-* that are not links into the core,
+#                   and .claude/commands/dev-*.md
+#   Plugins         skills/dev-*/SKILL.md inside ~/.claude/plugins/cache/ and ~/.codex/plugins/cache/
+#   This Mac        ~/.claude/skills/dev-*, ~/.agents/skills/dev-*, ~/.gemini/config/skills/dev-*
+#
+# What waits for PA (`next`): offline, from local state only: git hooks not installed, local main
+# behind origin/main as of the last fetch, `gh` logged in with PA's own account. With --online
+# (needs a bot token in GH_TOKEN, as `gh-token.sh <bot> --read-only --` gives): open pull requests,
+# local branches merged on GitHub (the prune script's --all --dry-run), draft releases, and, in a
+# consumer, a core tag newer than .harness/VERSION (read from the public workshop, whose URL
+# HARNESS_WORKSHOP_URL overrides for tests).
+#
+# Output: the last three lines follow the core's output rule (done: / left for PA: / next:).
+# Exit 0, or 1 when `list --check` finds a problem, 2 on a usage error.
+set -euo pipefail
+
+here_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+core_rel=$(basename "$here_dir") # .harness in a consumer, harness in the workshop
+TAB=$(printf '\t')
+
+ending() { printf 'done: %s\nleft for PA: %s\nnext: %s\n' "$1" "$2" "$3"; }
+usage() {
+  printf 'usage: %s/commands list [--online] | list --check | next [--online]\n' "$core_rel" >&2
+  ending "refused; nothing changed" "nothing" "/dev-help" >&2
+  exit 2
+}
+
+top=$(git rev-parse --show-toplevel 2>/dev/null) || {
+  printf 'commands: not inside a git repository\n' >&2
+  ending "refused; nothing changed" "nothing" "cd into a repository, then /dev-help" >&2
+  exit 2
+}
+cd "$top"
+
+# ---------------------------------------------------------------------------------------------
+# Frontmatter: prints "name<TAB>description<TAB>audience" for one SKILL.md or command file, with
+# "-" for an empty value (`read` with a tab IFS would merge empty fields: tab is IFS whitespace).
+# A folded or literal description (`>`, `|`, with or without `-`) joins its indented lines.
+frontmatter() {
+  awk -v tab="$TAB" '
+    function val(s) { sub(/^[^:]*:[ \t]*/, "", s); gsub(/^["'\'']|["'\'']$/, "", s); return s }
+    NR == 1 { if ($0 != "---") exit; next }
+    $0 == "---" { exit }
+    cont && /^[ \t]+[^ \t]/ { line = $0; sub(/^[ \t]+/, "", line); desc = desc (desc == "" ? "" : " ") line; next }
+    { cont = 0 }
+    /^name:/ { name = val($0) }
+    /^description:/ { desc = val($0); if (desc ~ /^[>|]-?$/) { desc = ""; cont = 1 } }
+    /^[ \t]+audience:[ \t]*agents[ \t]*$/ { audience = "agents" }
+    function v(s) { return s == "" ? "-" : s }
+    END { print v(name) tab v(desc) tab v(audience) }
+  ' "$1"
+}
+
+# Real path of a file, or empty when it cannot be resolved.
+real() { (cd "$(dirname "$1")" 2>/dev/null && printf '%s/%s\n' "$(pwd -P)" "$(basename "$1")") || true; }
+
+# Records: group<TAB>name<TAB>description<TAB>dir name<TAB>real path<TAB>origin
+records=""
+add() { records="$records$1$TAB$2$TAB$3$TAB$4$TAB$5$TAB$6
+"; }
+
+add_skill() { # add_skill GROUP SKILL_DIR ORIGIN
+  local file="$2/SKILL.md" fm name desc audience group="$1"
+  [ -f "$file" ] || return 0
+  fm=$(frontmatter "$file")
+  IFS="$TAB" read -r name desc audience <<EOF
+$fm
+EOF
+  [ "$name" != - ] || name=""
+  [ "$desc" != - ] || desc=""
+  if [ "$group" = core ] && [ "$audience" = agents ]; then group=agents; fi
+  add "$group" "$name" "$desc" "$(basename "$2")" "$(real "$file")" "$3"
+}
+
+core_skills="$here_dir/skills"
+for d in "$core_skills"/*/; do
+  [ -d "$d" ] || continue
+  add_skill core "${d%/}" "$core_rel/skills"
+done
+
+for place in .agents/skills .claude/skills; do
+  for d in "$place"/dev-*; do
+    [ -d "$d" ] || continue
+    case "$(real "$d/SKILL.md")" in "$core_skills"/*) continue ;; esac # a link into the core
+    add_skill repo "$d" "$place"
+  done
+done
+for f in .claude/commands/dev-*.md; do
+  [ -f "$f" ] || continue
+  fm=$(frontmatter "$f")
+  IFS="$TAB" read -r _ desc _ <<EOF
+$fm
+EOF
+  [ "$desc" != - ] || desc=""
+  name=$(basename "$f" .md)
+  add repo "$name" "$desc" "$name" "$(real "$f")" ".claude/commands"
+done
+
+plugin_places=0
+for cache in "$HOME/.claude/plugins/cache" "$HOME/.codex/plugins/cache"; do
+  [ -d "$cache" ] || continue
+  plugin_places=$((plugin_places + 1))
+  # <cache>/<marketplace>/<plugin>/<version>/skills/<skill>/SKILL.md; one line per plugin and name,
+  # whatever the number of cached versions.
+  while IFS= read -r file; do
+    rel=${file#"$cache"/}
+    plugin=$(printf '%s' "$rel" | cut -d/ -f2)
+    add_skill plugin "$(dirname "$file")" "plugin $plugin"
+  done < <(find "$cache" -mindepth 5 -maxdepth 6 -path '*/skills/dev-*/SKILL.md' 2>/dev/null | sort)
+done
+
+mac_places=0
+for place in "$HOME/.claude/skills" "$HOME/.agents/skills" "$HOME/.gemini/config/skills"; do
+  [ -d "$place" ] || continue
+  mac_places=$((mac_places + 1))
+  for d in "$place"/dev-*; do
+    [ -d "$d" ] || continue
+    add_skill mac "$d" "~${place#"$HOME"}"
+  done
+done
+
+# One line per command and group: the same file through two links, or one plugin's several cached
+# versions, is listed once.
+unique=$(printf '%s' "$records" | awk -F"$TAB" '!seen[$1 FS $5]++ && !(($1 == "plugin") && seen2[$1 FS $2 FS $6]++)')
+
+# ---------------------------------------------------------------------------------------------
+# What waits for PA: "what<TAB>command" lines.
+waiting=""
+wait_item() { waiting="$waiting$1$TAB$2
+"; }
+
+repo_slug() {
+  git remote get-url origin 2>/dev/null | sed -E -n 's#^.*github\.com[:/]([^/]+/[^/]+)$#\1#p' | sed 's/\.git$//'
+}
+
+collect_waiting() { # collect_waiting ONLINE(0|1)
+  local hooks count slug latest have line
+  hooks=$(git config --get core.hooksPath 2>/dev/null || true)
+  [ "$hooks" = "$core_rel/githooks" ] || wait_item "the core's git hooks are not installed in this clone" "./dev setup"
+  if git rev-parse -q --verify refs/remotes/origin/main >/dev/null && git rev-parse -q --verify refs/heads/main >/dev/null; then
+    count=$(git rev-list --count main..origin/main)
+    [ "$count" = 0 ] || wait_item "local main is $count commit(s) behind origin/main (as of the last fetch)" "/dev-update-local-repo"
+  fi
+  if command -v gh >/dev/null 2>&1 && env -u GH_TOKEN -u GITHUB_TOKEN gh auth status >/dev/null 2>&1; then
+    wait_item "gh is logged in with your own account, which agents must never use" "gh auth logout"
+  fi
+  [ "$1" = 1 ] || return 0
+
+  if [ -z "${GH_TOKEN:-}" ]; then
+    wait_item "online checks skipped: no bot token in GH_TOKEN" "/dev-status"
+    return 0
+  fi
+  slug=$(repo_slug)
+  if [ -z "$slug" ]; then
+    wait_item "online checks skipped: origin is not a GitHub remote" "git remote -v"
+    return 0
+  fi
+  while IFS="$TAB" read -r num draft title url; do
+    [ -n "$num" ] || continue
+    if [ "$draft" = true ]; then
+      wait_item "PR #$num \"$title\" is a draft: mark it ready on GitHub once its work is done" "$url"
+    else
+      wait_item "PR #$num \"$title\" is ready: review and merge it on GitHub" "$url"
+    fi
+  done < <(gh pr list --repo "$slug" --state open --json number,isDraft,title,url \
+    --jq '.[] | "\(.number)\t\(.isDraft)\t\(.title)\t\(.url)"' 2>/dev/null || true)
+
+  if [ -x "$here_dir/git-prune-merged.sh" ]; then
+    line=$("$here_dir/git-prune-merged.sh" --all --dry-run 2>/dev/null | sed -n 's/^git-prune-merged: would prune \([^ ]*\) .*/\1/p' | tr '\n' ' ' | sed 's/ $//') || true
+    [ -z "$line" ] || wait_item "local branches merged on GitHub: $line" "/dev-delete-merged-branches $line"
+  fi
+
+  while IFS= read -r tag; do
+    [ -n "$tag" ] || continue
+    if [ "$core_rel" = harness ]; then
+      wait_item "draft release $tag waits to be published" "/dev-plugin-release"
+    else
+      wait_item "draft release $tag waits to be published" "/dev-run-with-owner-token"
+    fi
+  done < <(gh release list --repo "$slug" --json tagName,isDraft --jq '.[] | select(.isDraft) | .tagName' 2>/dev/null || true)
+
+  if [ "$core_rel" = .harness ] && [ -f .harness/VERSION ]; then
+    have=$(sed -n 's/^core //p' .harness/VERSION | head -1)
+    latest=$("$here_dir/harness-sync" --latest 2>/dev/null) || true
+    if [ -n "$latest" ] && [ "$latest" != "$have" ]; then
+      wait_item "core $latest is out; this repository has ${have:-an unknown version}" "/dev-harness-sync $latest"
+    fi
+  fi
+}
+
+print_waiting() {
+  if [ -z "$waiting" ]; then
+    printf '  nothing\n'
+  else
+    printf '%s' "$waiting" | awk -F"$TAB" '{ printf "  - %s: %s\n", $1, $2 }'
+  fi
+}
+
+waiting_count() { printf '%s' "$waiting" | awk 'NF { n++ } END { print n + 0 }'; }
+first_waiting_command() { printf '%s' "$waiting" | awk -F"$TAB" 'NF { print $2; exit }'; }
+
+# ---------------------------------------------------------------------------------------------
+print_group() { # print_group KEY TITLE [MISSING_LINE]
+  local lines
+  lines=$(printf '%s' "$unique" | awk -F"$TAB" -v g="$1" '$1 == g {
+      d = $3; p = index(d, ". "); if (p > 0) d = substr(d, 1, p)  # the first sentence
+      if (length(d) > 110) d = substr(d, 1, 107) "..."
+      o = (g == "plugin" || g == "repo" || g == "mac") ? "  (" $6 ")" : ""
+      printf "  /%s — %s%s\n", $2, d, o }' | sort)
+  printf '%s\n' "$2"
+  if [ -n "$lines" ]; then printf '%s\n' "$lines"; else printf '  %s\n' "${3:-none}"; fi
+}
+
+check_list() {
+  local problems
+  problems=$(printf '%s' "$unique" | awk -F"$TAB" '
+    NF == 0 { next }
+    $1 != "repo" || $6 != ".claude/commands" {
+      if ($2 != $4) printf "commands: %s (%s): name %s differs from its directory\n", $4, $6, ($2 == "" ? "(none)" : $2)
+    }
+    $2 !~ /^dev-/ && ($1 == "core" || $1 == "agents") { printf "commands: core skill %s does not start with dev-\n", $4 }
+    $3 == "" { printf "commands: %s (%s) has no description\n", $4, $6 }
+    { n = ($2 == "" ? $4 : $2); if (n in where) printf "commands: %s is defined twice: %s and %s\n", n, where[n], $6; else where[n] = $6 }
+  ')
+  if [ -n "$problems" ]; then
+    printf '%s\n' "$problems"
+    ending "list --check failed: $(printf '%s\n' "$problems" | wc -l | tr -d ' ') problem(s)" "nothing" "fix each line above, then $core_rel/commands list --check"
+    exit 1
+  fi
+  ending "list --check passed: $(printf '%s' "$unique" | awk 'NF { n++ } END { print n + 0 }') command(s), no problem" "nothing" "/dev-help"
+}
+
+mode=${1:-}
+online=0
+case "$mode" in
+  list | next) shift ;;
+  *) usage ;;
+esac
+check=0
+for arg in "$@"; do
+  case "$arg" in
+    --online) online=1 ;;
+    --check) [ "$mode" = list ] || usage; check=1 ;;
+    *) usage ;;
+  esac
+done
+[ "$check" = 0 ] || [ "$online" = 0 ] || usage
+
+if [ "$check" = 1 ]; then check_list; exit 0; fi
+
+collect_waiting "$online"
+n_wait=$(waiting_count)
+if [ "$n_wait" = 0 ]; then left="nothing"; else left="the $n_wait item(s) under 'Waiting for you'"; fi
+
+if [ "$mode" = next ]; then
+  printf 'Waiting for you\n'
+  print_waiting
+  if [ "$n_wait" = 0 ]; then
+    ending "nothing waits for PA" "nothing" "/dev-help"
+  else
+    ending "$n_wait item(s) wait for PA" "$left" "$(first_waiting_command)"
+  fi
+  exit 0
+fi
+
+printf 'Waiting for you\n'
+print_waiting
+print_group core "Core"
+print_group repo "This repository"
+if [ "$plugin_places" = 0 ]; then print_group plugin "Plugins" "none on this machine"; else print_group plugin "Plugins"; fi
+if [ "$mac_places" = 0 ]; then print_group mac "This Mac" "none on this machine"; else print_group mac "This Mac"; fi
+print_group agents "Used by agents"
+if [ "$core_rel" != harness ]; then
+  # shellcheck disable=SC2016 # backticks are text here
+  printf 'Releases, plugins, sync and new repositories: `/dev-help` in pa-agent-kit\n'
+fi
+total=$(printf '%s' "$unique" | awk 'NF { n++ } END { print n + 0 }')
+if [ "$n_wait" = 0 ]; then
+  ending "listed $total command(s); nothing waits for PA" "nothing" "type one of the /dev- names above"
+else
+  ending "listed $total command(s); $n_wait item(s) wait for PA" "$left" "$(first_waiting_command)"
+fi

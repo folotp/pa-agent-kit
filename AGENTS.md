@@ -14,6 +14,10 @@ Same text in every repository that uses the harness core; copied from `harness/t
 - Keep hostnames, addresses and personal details out of commits, PR text and docs.
 - Flag a new dependency before adding it.
 - Update code, related docs, examples and tests in the same PR. A reviewer must be able to understand and operate the change without this conversation.
+- When PA must act, in a reply, a report or a PR body, end with what happened, what is left for PA and the one exact next step, by its `/dev-` command; `/dev-help` lists them, `.harness/README.md` explains the core; a PA step with no command is reported as a candidate.
+- Commands for PA are skills named `dev-<subject>-<action>`; never reuse a core `dev-` name.
+- A refusal by the guard, a hook or the gate is final: do not retry it another way; run the command its message names, or tell PA.
+- Commit and PR titles follow Conventional Commits.
 <!-- harness:shared:end -->
 
 ## This repository
@@ -28,7 +32,7 @@ Use `./dev ci` for automation changes: it runs the unit tests, the online `scrip
 - Never set `version` in both `plugin.json` and the marketplace entry: `plugin.json` wins silently.
 - Never re-introduce the legacy `commit` field on github sources.
 - Portable plugins are also listed in `.agents/plugins/marketplace.json` for Codex (source local, same relative path); listing one is a manual review.
-- PA pushes `<plugin>/v<version>` on the merge commit of a version bump (tag ruleset: only PA; `harness/gh-token.sh pa -- python3 scripts/tag-release.py <plugin>`); `release.yml` then drafts the release and attaches the zips (`scripts/release-plugins.py --tag`). Publishing is manual, after assets are attached. See `docs/releases.md`.
+- PA pushes `<plugin>/v<version>` on the merge commit of a version bump (tag ruleset: only PA; `harness/gh-token.sh owner -- python3 scripts/tag-release.py <plugin>`); `release.yml` then drafts the release and attaches the zips (`scripts/release-plugins.py --tag`). Publishing is manual, after assets are attached. See `docs/releases.md`.
 - Do not run the bumper against actual manifests merely to test it: use disposable fixtures or an explicitly authorized pin update.
 
 ### Validation
