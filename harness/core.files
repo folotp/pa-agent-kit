@@ -10,6 +10,7 @@ check-dependabot
 check-bindings
 gh-token.sh
 gh-token.md
+git-prune-merged.sh
 README.md
 core.files
 bindings/

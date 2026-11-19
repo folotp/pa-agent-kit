@@ -30,7 +30,7 @@
 
 ## Guard and tokens
 
-The guard (`.harness/guard`) refuses PA's actions (merge, ready, push to `main`, force push, published release, skipped hooks, `git branch -D`) and names the sanctioned way in the same line. A refusal is final: run what it names, or tell PA. Agents act on GitHub as their bot through `.harness/gh-token.sh <bot> -- …`; PA's own token is released one command at a time with `owner -- …`: see `.harness/gh-token.md`. Merged branches are deleted with `/dev-delete-merged-branches`.
+The guard (`.harness/guard`) refuses PA's actions (merge, ready, push to `main`, force push, published release, skipped hooks, `git branch -D`) and names the sanctioned way in the same line. A refusal is final: run what it names, or tell PA. Agents act on GitHub as their bot through `.harness/gh-token.sh <bot> -- …`; PA's own token is released one command at a time with `owner -- …`: see `.harness/gh-token.md`. Merged branches are deleted with `/dev-delete-merged-branches` (`.harness/git-prune-merged.sh`: only when GitHub shows the merge at the local tip); a repository's standing branches go in `harness.toml` as `protected_branches = ["…"]`, and the script never deletes them, nor `main` or `master`.
 
 ## Cloud sessions
 

@@ -48,7 +48,10 @@ function bad(why) { printf "dev: harness.toml:%d: %s\n", NR, why > "/dev/stderr"
       bad("unknown gate key, or wrong type: " key)
     print "gate\t" key "\t" val
   } else {
-    if (!(((key == "profile" || key == "check") && kind == "s") || (key == "tools" && kind == "a"))) bad("unknown key " key)
+    # protected_branches: standing branches that harness/git-prune-merged.sh never deletes (besides
+    # main and master), read by that script only.
+    if (!(((key == "profile" || key == "check") && kind == "s") ||
+          ((key == "tools" || key == "protected_branches") && kind == "a"))) bad("unknown key, or wrong type: " key)
     print "conf\t" key "\t" val
   }
 }

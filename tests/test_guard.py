@@ -297,6 +297,8 @@ class GuardTest(unittest.TestCase):
         "git branch --format=%(refname:short) --list 'feat/*'",
         "harness/gh-token.sh claude -- harness/git-prune-merged.sh feat/x",
         ".harness/gh-token.sh claude -- .harness/git-prune-merged.sh feat/x",
+        ".harness/gh-token.sh claude -- .harness/git-prune-merged.sh --all",
+        ".harness/gh-token.sh codex -- .harness/git-prune-merged.sh --dry-run feat/x",
         "git log --oneline -D",
     ]
 
