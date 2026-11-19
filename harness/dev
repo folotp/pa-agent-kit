@@ -175,7 +175,7 @@ run_check() {
   bash -o pipefail -c "$1" </dev/null
 }
 
-# The core's own checks of the repository (24g: D1 pins), offline text checks next to this file.
+# The core's own checks of the repository (24g: D1 pins, D2 Dependabot), offline text checks next to this file.
 # Each prints one line per finding and exits non-zero; every check runs, so one pass shows all of
 # them, then any finding fails `check` and `ci`.
 core_checks() {
@@ -183,6 +183,7 @@ core_checks() {
   here="$(dirname "$self")"
   if [ -d .github ]; then
     "$here/check-pins" || failed="$failed pins"
+    "$here/check-dependabot" || failed="$failed dependabot"
   fi
   [ -z "$failed" ] || die "core checks failed:$failed (each line above names the file and the fix)"
   printf '%-12s %s\n' core-checks ok

@@ -124,6 +124,28 @@ class SyncTest(unittest.TestCase):
         self.assertTrue((self.consumer / ".codex" / "hooks.json").is_file())
         self.assertIn("`.claude/skills` is not the symlink", result.stdout)
 
+    def test_dependabot_template_is_written_only_when_absent(self):
+        """24g D2: a starting point, never compared once the repository has its own."""
+        result = self.sync()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.consumer / ".github" / "dependabot.yml").read_bytes(), (ROOT / "harness" / "templates" / "dependabot.yml").read_bytes())
+        self.assertIn("`.github/dependabot.yml` written from `.harness/templates/dependabot.yml` (was absent)", result.stdout)
+
+    def test_an_existing_dependabot_file_is_kept_and_reported(self):
+        for name in ("dependabot.yml", "dependabot.yaml"):
+            with self.subTest(name):
+                self.setUp()
+                own = self.consumer / ".github" / name
+                own.parent.mkdir()
+                own.write_text("version: 2\nupdates: []\n")
+                git(self.consumer, "add", "-A")
+                git(self.consumer, "commit", "-q", "-m", "own dependabot")
+                result = self.sync()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(own.read_text(), "version: 2\nupdates: []\n")
+                self.assertEqual(sorted(p.name for p in own.parent.iterdir()), [name])
+                self.assertIn(f"`.github/{name}` kept as it is (the repository's own; `./dev check` judges", result.stdout)
+
     def test_shared_block_is_replaced_between_markers_only(self):
         begin, end = "<!-- harness:shared:begin -->", "<!-- harness:shared:end -->"
         (self.consumer / "AGENTS.md").write_text(f"top\n{begin}\nold\n{end}\nown rules\n")

@@ -6,6 +6,7 @@ conf.awk
 gate
 guard
 check-pins
+check-dependabot
 gh-token.sh
 gh-token.md
 core.files

@@ -15,6 +15,8 @@ What it writes in the target, on a new branch `harness-sync/<rev>`, in one commi
      `harness/bindings/` and the `CLAUDE.md` stub. The consumer's own files are never overwritten,
      but one that differs leaves part of the core unwired, so sync refuses (exit 1, nothing
      written) unless `--keep-root <file>` names it; a kept file is reported with what stays unwired.
+  2b. Starting points (STARTERS), written only where the target has none and never compared after:
+     `.github/dependabot.yml` from `templates/dependabot.yml`. An existing one is kept and reported.
   3. The shared block of `AGENTS.md` (between `harness:shared:begin` and `harness:shared:end`):
      replaced when both markers are present, otherwise reported.
   4. The `.claude/skills` symlink is only checked and reported.
@@ -125,6 +127,33 @@ def differing_roots(target, files):
     )
 
 
+# Starting points, unlike root files: written only where the target has none of the given names,
+# then the repository's own file, which it is expected to change (other ecosystems, its own rules),
+# so an existing one is never compared with the template and never refused (24g D2, F1).
+# {destination: (core template, other names that count as present, note when written, note when kept)}
+STARTERS = {
+    ".github/dependabot.yml": (
+        "templates/dependabot.yml", (".github/dependabot.yaml",),
+        "review its schedule and add the repository's other ecosystems below its entry",
+        "the repository's own; `./dev check` judges its github-actions entry (cooldown, local actions)",
+    ),
+}
+
+
+def write_when_absent(target, files):
+    """Write each starter of STARTERS the target lacks; return one report line per starter."""
+    report = []
+    for dest, (source, aliases, written, kept) in STARTERS.items():
+        present = [name for name in (dest, *aliases) if (target / name).exists()]
+        if present:
+            report.append(f"- `{present[0]}` kept as it is ({kept})")
+        else:
+            mode, data = files[source]
+            write(target / dest, data, mode)
+            report.append(f"- `{dest}` written from `.harness/{source}` (was absent): {written}")
+    return report
+
+
 def install(target, rev, commit, files, kept=()):
     """Write the target tree. Returns the report lines. `kept` are differing root files that
     the caller named with --keep-root; main() refused any other differing root file before."""
@@ -156,6 +185,8 @@ def install(target, rev, commit, files, kept=()):
             report.append(
                 f"- `{dest}` DIFFERS from the core template; kept by --keep-root, so {unwired(dest)} "
                 f"stays unwired (compare with `.harness/{source}`)")
+
+    report.extend(write_when_absent(target, files))
 
     agents = target / "AGENTS.md"
     template = files["templates/AGENTS.shared.md"][1].decode()

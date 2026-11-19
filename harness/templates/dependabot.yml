@@ -1,0 +1,29 @@
+# Dependabot configuration, from the harness core's template (.harness/templates/dependabot.yml).
+# `./dev sync` writes it only where the repository has none; from then on it is the repository's
+# file, never overwritten.
+#
+# The github-actions entry moves the SHA pins that `./dev check` requires (check-pins): monthly, in
+# one PR, and only for releases at least 7 days old (report 2.8). `./dev check` (check-dependabot)
+# requires a cooldown of 7 days or more and that every local action under .github/actions/ that
+# calls a remote action is covered: `directory: /` reads .github/workflows/ and a root action.yml
+# only, so a repository with local actions replaces `directory: /` with
+#     directories:
+#       - "/"
+#       - "/.github/actions/*"
+# Schedule, group and commit prefix are this repository's choice.
+#
+# Other ecosystems (pip, npm, docker, terraform, …) are added below by the repository, as further
+# entries of `updates:`.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: chore(actions)

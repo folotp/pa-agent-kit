@@ -54,7 +54,7 @@ class FixtureRepo:
         test.addCleanup(shutil.rmtree, self.dir, True)
         (self.dir / "harness").mkdir()
         shutil.copy2(ROOT / "dev", self.dir / "dev")
-        for name in ("dev", "conf.awk", "gate", "check-pins"):
+        for name in ("dev", "conf.awk", "gate", "check-pins", "check-dependabot"):
             shutil.copy2(ROOT / "harness" / name, self.dir / "harness" / name)
         for name in ("mise.toml", "mise.lock"):
             shutil.copy2(ROOT / name, self.dir / name)
@@ -239,7 +239,16 @@ class CoreChecksTest(unittest.TestCase):
         workflow = fixture.dir / ".github" / "workflows" / "ci.yml"
         workflow.parent.mkdir(parents=True)
         workflow.write_text(f"jobs:\n  a:\n    steps:\n      - uses: {uses}\n")
+        shutil.copy2(ROOT / "harness" / "templates" / "dependabot.yml", fixture.dir / ".github" / "dependabot.yml")
         return fixture
+
+    def test_a_missing_dependabot_file_fails_check(self):
+        fixture = self.fixture_with_workflow(f"actions/checkout@{self.SHA}")
+        (fixture.dir / ".github" / "dependabot.yml").unlink()
+        result = run_dev(fixture.dir, "check", env=fixture.env)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(".github/dependabot.yml is missing: copy harness/templates/dependabot.yml there", result.stdout)
+        self.assertIn("core checks failed: dependabot", result.stderr)
 
     def test_an_unpinned_action_fails_check_and_ci(self):
         fixture = self.fixture_with_workflow("actions/checkout@v4")
