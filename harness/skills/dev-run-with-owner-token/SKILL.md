@@ -1,6 +1,6 @@
 ---
 name: dev-run-with-owner-token
-description: Prepares one command for your own GitHub token (the owner token). For what a bot cannot do: push a workflow file, re-run CI, apply a settings batch, archive a repository, publish a draft release. Run when PA types /dev-run-with-owner-token or another command names it.
+description: Prepares one command for your own GitHub token (the owner token). Use it to push a workflow file, re-run CI, apply a settings batch, archive a repository, publish a draft release. Run when PA types /dev-run-with-owner-token or another command names it.
 disable-model-invocation: true
 ---
 

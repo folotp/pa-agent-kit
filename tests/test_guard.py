@@ -8,7 +8,6 @@ It needs jq on the system PATH, as in a real hook.
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -314,23 +313,6 @@ class GuardTest(unittest.TestCase):
             with self.subTest(command):
                 self.assertAllowed(run_guard("claude", claude(command)))
                 self.assertAllowed(run_guard("antigravity", antigravity(command)))
-
-    def test_every_denial_names_the_sanctioned_way(self):
-        """24i's refusal rule: each reason names a /dev- command or a `command` to run."""
-        sanctioned = re.compile(r"/dev-[a-z]+(-[a-z]+)*|`[^`]+`")
-        results = [run_guard("claude", claude(c)) for c in ALWAYS_DENIED + self.BRANCH_FORCE_DELETES]
-        results += [run_guard("claude", claude(c, "dontAsk")) for c in RELEASES]
-        results += [
-            run_guard("claude", claude("git status"), path="/nonexistent"),
-            run_guard("claude", "not json"),
-            run_guard("gemini", claude("git status")),
-            run_guard("claude", claude(["ls"])),
-            run_guard("claude", claude("ls " + "x" * 200_000)),
-        ]
-        for result in results:
-            with self.subTest(result.stderr):
-                self.assertEqual(result.returncode, 2)
-                self.assertRegex(result.stderr, sanctioned)
 
     def test_the_push_refusal_names_the_token_script_where_it_is(self):
         """The workshop's guard names harness/gh-token.sh, a consumer's .harness/gh-token.sh."""

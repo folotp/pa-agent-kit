@@ -1,6 +1,6 @@
 ---
 name: dev-help
-description: Lists every dev- command and what waits for you. Grouped: core, this repository, plugins, this Mac, used by agents. Run when PA types /dev-help or asks which commands exist.
+description: Lists every dev- command and what waits for you. Groups include core, this repository, plugins, this Mac, used by agents. Run when PA types /dev-help or asks which commands exist.
 disable-model-invocation: true
 ---
 
