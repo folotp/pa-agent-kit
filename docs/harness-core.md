@@ -66,7 +66,7 @@ Every core file serves two or more repositories and is tested in the workshop. T
 
 Nothing referenced the deleted files outside themselves and this page: no workflow, no `harness.toml` entry, no root test, no plugin manifest. Every deleted file can be read at commit `60c18cd` (for example `git show 60c18cd:harness/scripts/dev.py`), and in the archived `pa-toolkit` repository.
 
-Still open, outside this page: the `pa-toolkit` plugin's `config/release.json`, `AGENTS.md`, `README.md` and `skills/plugin-release/references/development.md` still name `./scripts/dev` and `release-checks.yml`. These have not existed relative to the plugin since session 16. Fixing them is a plugin change with its own version bump, left to a later session.
+Session 25 closed the stale pa-toolkit path references in PR #99.
 
 ## What the core does
 
@@ -136,8 +136,7 @@ No question waits on PA. What the core accepts as limits, after session 24c (Cod
 - **The prompt authorizes a credential, not a commit (C1).** The release command is an ordinary executable of the repository; the Keychain prompt releases a credential to it and does not bind PA's approval to the commit, the target or the operation. The gate's checks and PA's confirmation of the guarded diff stand in for that binding. A stronger design, an owner-controlled component outside the checkout that shows and binds the exact SHA and operation, is not built.
 - **The checked commit and the executed files can drift (C4).** The gate reads `HEAD` and the working tree, not an immutable checkout of the verified SHA, and does not re-check GitHub's `main` at the moment of the release. The clean-tree check and the house receiver's exact-SHA fast-forward (`ha-config`) narrow the window; nothing closes it in the core.
 - **Agents with a shell can still change the gate (C19, report 2.3 'What stays open').** The gate, the record in `.git/dev-<verb>/` and the hooks live in the clone; an agent with a shell on the Mac can edit them. Only the credential prompt holds; the gate shows PA what changed since the last release, and the guard refuses the obvious routes.
-- **mise runs before the gate's first check (C2, remainder).** Stage 1 starts `mise exec`, which reads the configuration files before stage 2 can refuse what they add; a mise `_.source` script would already have run. Stage 2 then refuses any variable or `PATH` entry they added.
-- **The read-only gate updates `origin/main` (C23).** `./dev gate` fetches `origin main`, which moves the remote-tracking ref; it writes nothing else.
+- **mise configuration evaluation.** The release gate completes the Git, provenance and guarded-history checks before starting mise. Evaluating repository, parent or global configuration may execute a source directive before mise can report its environment changes. It runs with the OS user’s filesystem access, the allowed base and proxy environment and the approved repository’s `keep_env` values. The GitHub credential has already been discarded. Ordinary nongate verbs keep their own environment contract.
 - **The baseline stays in the clone (PA's choice, session 24c; C8).** See 'Baseline'.
 
 ## Cloud sessions
@@ -160,13 +159,12 @@ Common to both, and therefore in the core (`harness/gate`):
 
 | Part | Behaviour |
 |---|---|
-| Strict re-run | The release verb never trusts the caller: mise only from its fixed install locations (never `PATH`), a system `PATH`, a named list of variables (everything else dropped, exported functions too), then `mise exec --locked`. The second stage is marked by an argument, not by the environment. |
-| Second-stage check | Nothing dropped may be back (a hand-typed second stage, or a mise `[env]` section). |
-| Variables kept | Home, user, temp, terminal, locale, `MISE_STATE_DIR`; for the gate the bot token (`GH_TOKEN` and the `GIT_CONFIG_*` entries of `gh-token.sh`) and the proxy settings. |
+| Preflight | Use fixed executable locations and validate caller Git entries before the first Git read. Repository environment values are retained privately until the release checks finish. |
+| GitHub reads | Only the remote ref query and individual API reads receive the caller’s GitHub credential. |
 | Settings | `repo`, `merger`, `guarded_paths`, validated, in a committed file that is parsed, never sourced. |
 | 1. Clean tree | No `assume-unchanged` or `skip-worktree` entry; `git status` empty, untracked files included; no ignored file that mise would load (`mise.local.toml`, `.tool-versions`, `.mise/`, `.config/`). |
 | GitHub token | Refuses at once without `GH_TOKEN`, before git can prompt. |
-| 2. Tip | Fetch with every prompt off; `HEAD` = `origin/main` = `main` on GitHub. |
+| 2. Tip | Read the advertised main ref outside the checkout with prompts off. Match HEAD against both the remote and the GitHub commit API. |
 | 4. Merged by | The commit is the merge commit of exactly one PR into `main`, merged by `merger`. |
 | 5. Descent | `HEAD` descends from the last released commit when this clone has it. Record in `<git common dir>/dev-<verb>/` (`last`, `log`), never committed. |
 | Guarded diff | Diff of the guarded paths since the last release (or their recent history when there is none), confirmed by PA on `/dev/tty`. |
@@ -197,25 +195,23 @@ This table is the common part as session 20 found it. Session 24c went beyond bo
 
 | Command | Effect |
 |---|---|
-| `./dev gate` | Read-only: checks 1 to 4 on `HEAD`, then check 5 (every change since the last release). Runs under the ordinary `mise exec` re-run, so it works in an agent shell. |
+| `./dev gate` | Read-only: checks 1 to 4 on `HEAD`, then check 5 (every change since the last release). Uses the same credential-isolated entry as the release. |
 | `./dev gate <sha>` | Read-only: CI and merged-by for that commit only. |
 | `./dev gate --baseline <sha>` | PA's recovery of a missing or unusable release record ('Baseline'). Needs a terminal and PA's `yes`; no GitHub token. |
 | `./dev apply` or `./dev deploy` (the `verb` of `harness.toml`) `[args…]` | The release: strict re-run, every check, the guarded diff, `./dev check`, then the release command with `args`. The other verb is refused. |
 | `harness/gate tree` | Check 1 only, no network. For a release command that must re-check the tree after a long step (a Terraform plan). |
 
-Both verbs need the bot's read-only token: run them as `harness/gh-token.sh claude --read-only -- ./dev …` (`--read-only` asks GitHub for every permission at level read, finding K20). Without `GH_TOKEN` the gate refuses before git can prompt.
+Both verbs use the current agent’s read-only installation token via `harness/gh-token.sh <bot> --read-only -- ./dev …` (`--read-only` asks GitHub for every permission at level read, finding K20). Without `GH_TOKEN` the gate refuses before git can prompt.
 
 ### Order of a release
 
 Stage 2 runs, in this order (finding K20: nothing of the repository runs before its provenance is checked, and nothing of it runs with the GitHub credential):
 
-1. the settings, the environment (named list, git entries, mise additions: 'The strict re-run'), the token, then the lock of the record directory;
-2. checks 1 to 4 on `HEAD`; check 5, every change since the last release; check 6, the guarded diff and settings, confirmed by PA;
-3. the GitHub credential is dropped (`GH_TOKEN` and the `GIT_CONFIG_*` entries);
-4. `./dev check`: the repository's tools and its offline `check` command;
-5. the release command.
+1. Validate Git authentication settings, parse the policy, clear the process environment and validate the tracked release executable.
+2. Acquire the clone lock and verify the tree, current remote main, CI and required PR history. Present the union of old and new guarded paths and settings. An unreadable historical policy stops the release.
+3. Discard the GitHub credential. Restore the declared release environment and check mise configuration. Run the repository check, then the synchronous release command under the locked tools.
 
-Every network call (the fetch, each GitHub read) runs under a 60-second deadline that ends in a refusal, and every GitHub collection is read page by page to the end (findings C10, C23).
+Each network operation has a 60-second deadline. Expiration fails even if the process handles TERM successfully. Remaining processes in its group are killed. Collection reads follow pagination.
 
 ### Baseline
 
@@ -224,7 +220,7 @@ The record of the last release, `<git common dir>/dev-<verb>/last`, is the basel
 - A missing record, a malformed one, or one whose commit is not in the clone is refused. Nothing falls back to recent history.
 - The only way to set it outside a release is `./dev gate --baseline <sha>` in PA's terminal: the commit must be in the clone and on `origin/main`; the gate shows it and the record it replaces (read as it is, so a malformed record can be replaced: it is the refusal's own way out), and PA types `yes`. It is logged in `log` as `baseline`.
 - A release writes it only after the release command succeeds, and only if it still holds what the run read at its start (written whole, then renamed).
-- A `lock` in the record directory serialises releases and baseline changes in one clone. It is a symbolic link whose target is the owner's PID, created with `ln -s`, so the lock and its owner appear in one atomic step and a second run never sees a live lock without a PID (Codex review of #102). A lock whose process is gone is taken over; anything else at that path (a directory, a link that is not a PID) is refused and left alone; each run removes only its own lock. Two runs taking over the same stale lock at the same instant remain a narrow race.
+- A `lock` in the record directory serialises releases and baseline changes in one clone. It is a symbolic link whose target is the owner's PID, created with `ln -s`, so the lock and its owner appear in one atomic step and a second run never sees a live lock without a PID (Codex review of #102). A stale lock requires manual recovery using the consumer README’s “Release lock” procedure. A caught termination signal is deferred through the foreground child. A hard stop leaves the lock in place.
 
 When a live repository moves to the core (sessions 26 and 27), its record directory keeps its name, so the existing `last` carries over. A fresh clone has none: PA records the commit the target runs (the host's `HEAD` for `ha-config`, the last apply for `network-config`) with `--baseline`.
 
@@ -267,16 +263,11 @@ It validates its own arguments before reading any credential, reads its credenti
 
 ### The strict re-run
 
-The release verb is handed from `harness/dev` to `harness/gate` before `dev`'s own `mise exec` re-run. Stage 1 finds mise only at `/opt/homebrew/bin`, `/usr/local/bin` or `~/.local/bin` (never `PATH`), sets a system `PATH`, drops every variable outside a named list and every exported function, and re-runs under `mise exec --locked`. Stage 2 is marked by an argument and refuses any variable outside the same named list plus what bash, macOS and mise add (`PWD`, `OLDPWD`, `SHLVL`, `_`, `__CF_USER_TEXT_ENCODING`, `__MISE_*`): a named list, not a deny list (finding F6 of session 04), so a mise `[env]` section or a hand-typed second stage is caught whatever it sets.
+Both gate entry points bypass the ordinary dispatcher’s mise initialization. The gate checks the Git wrapper entries before Git reads the candidate, uses fixed tool locations, and withholds repository environment variables during verification. The credential stays in a shell variable and is exported only for individual GitHub operations. The remote ref check runs outside the checkout against a canonical HTTPS URL. The GitHub API supplies an independent comparison. Local tracking refs are unchanged.
 
-A name on the list is not enough (finding K10). Stage 2 also refuses:
+Use the current bot’s `--read-only` wrapper. The gate checks the authorization environment’s structure and cannot infer token permissions from its value. The wrapper validates the installation grant, constructs an explicit single-repository request, then verifies the returned repository, permissions and expiry before use.
 
-- `GIT_CONFIG_*` entries other than exactly those `gh-token.sh` exports (computed from the script itself: the same keys and values, no more, no fewer), so another credential helper, URL rewrite or option cannot ride on the kept names;
-- any variable the mise configuration sets (`mise env -D` must print nothing: `[env]`, `_.file`, `_.source`), and any `PATH` entry it adds outside the tools' own directories (`_.path`), from every file mise reads: the repository's, every parent directory's, the global configuration.
-
-Stage 2 runs `harness/dev check` only after the GitHub checks and without the GitHub credential ('Order of a release'), so every tool of `harness.toml` must resolve under mise.
-
-In an agent's sandbox, the git proxy lives in `GIT_CONFIG_PARAMETERS`, which the re-run drops: a release from an agent shell needs the sandbox off (tracker finding of session 04b). `./dev gate` keeps it and works inside the sandbox.
+After guarded-path review, mise may read configuration under the authorities listed in “Open questions.” The release refuses variables or extra PATH components contributed by that configuration.
 
 ### Refusal cases and their tests
 
@@ -285,11 +276,11 @@ Each refusal is one line, `dev: refused: …`, exit 1. `tests/test_gate.py` has 
 | Check | Refused when |
 |---|---|
 | Settings | no `[gate]` table; bad `repo`, `merger`, `verb`, `release` (missing, not executable, `..`, untracked, a symbolic link, git mode other than `100755`), `ci`, `checks_app`, `required` (empty or blank), `guarded`, `loaded`, `keep_env`; `gh` not in `tools`; an unknown key, a key given twice, a blank value or array item (`conf.awk`) |
-| Re-run | the other release verb; a variable outside the named list in stage 2 (a hand-typed `--stage2`); `GIT_CONFIG_*` entries that are not exactly `gh-token.sh`'s; a variable or `PATH` entry added by a mise configuration (repository, parent directory, global) |
+| Re-run | the other release verb or a retired internal entry; `GIT_CONFIG_*` entries that are not exactly `gh-token.sh`'s; a variable or `PATH` entry added by a mise configuration (repository, parent directory, global) |
 | Lock | another release or baseline change of this clone is running |
 | 1. Tree | `git ls-files -v` fails; an `assume-unchanged` or `skip-worktree` entry; a modified or untracked file; an ignored file mise loads (`mise.local.toml`, `.tool-versions`, `.config/`); an ignored file matching `loaded` |
 | Token | no `GH_TOKEN` |
-| 2. Tip | `origin` cannot be fetched (or the fetch passes the deadline); `HEAD` is not `origin/main`; GitHub's `main` differs or cannot be read |
+| 2. Tip | the origin ref cannot be read within the deadline; `HEAD` is not `origin/main`; GitHub's `main` differs or cannot be read |
 | 3. CI | runs cannot be read; no run; a run not completed; a run neither green, neutral nor skipped, on any page; a required run missing, or from another App |
 | 4. Merged by | PRs cannot be read; not the merge commit of a PR into `main`; several PRs; merged by anyone but `merger`; the PR cannot be read |
 | 5. Since the last release | no record, a malformed one, or one whose commit is not in the clone (the refusal names `./dev gate --baseline <sha>`); `HEAD` does not descend from it; a first-parent commit after it that is not the merge commit of one PR into `main` merged by `merger` (a direct push, finding K21) |
@@ -298,11 +289,13 @@ Each refusal is one line, `dev: refused: …`, exit 1. `tests/test_gate.py` has 
 | Release | the release command fails (logged, not recorded); `last` changed during the run (not overwritten) |
 | Baseline | no terminal; the commit is unknown or not on `origin/main`; PA does not type `yes` |
 
-The unit tests replace GitHub with a `gh` shell function that answers from files (pages and a hung call included): they test the gate's decisions, not `gh`'s `--jq` filters, which are unchanged from the two live gates where they were tested against GitHub. The end-to-end tests run the normal entry point (`./dev deploy`) through both stages with the real mise and a fake `gh` that mise resolves (a fake tool install in a private mise data directory): they check the order of a release (every GitHub read before any repository code, `./dev check` and the release command without the token), the environment refusals, and the record. The re-run and end-to-end tests are skipped where mise is not in a fixed location.
+The gate tests use synthetic Git histories, fixture API responses, inert release commands and real mise in a temporary consumer.
 
 ### Moving a live repository to it (sessions 26 and 27)
 
 `dev.conf` becomes the `[gate]` table; `scripts/` gets the release command, cut from the repository's `./dev` (`run_apply` and the `tfvars` checks for `network-config`; `read_target`, `release_deploy` and the host-`HEAD` check for `ha-config`, with `--check` exiting 3). The record directories keep their names (`dev-apply`, `dev-deploy`), so the last released commit carries over. The first release under the core finds no `[gate]` table at that commit, so PA confirms every setting as new along with the diff of the fixed set. Each live repository's `.githooks/` copies are deleted (the core hooks replace them), its `guarded` list keeps only paths outside the fixed set, and in `ha-config` nothing (the house host included) may push to `main` any more (check 5 refuses any first-parent commit that is not a PA merge).
+
+Sessions 26 and 27 must enumerate every repository check and release entry, sourced file, script, local action and executable configuration dependency. Resolve every symlink component through to its tracked in-repository target and guard both link and target. Replace external or untracked execution dependencies with a reviewed pinned installation or refuse adoption. Change each representative indirect dependency and symlink target in a fixture and verify the release shows its diff or refuses. Record the inventory and evidence on the consumer adoption SHA.
 
 ## Guard
 
@@ -424,7 +417,7 @@ In the consumer, on a new branch `harness-sync/<rev>` and in one commit:
 | What | Rule |
 |---|---|
 | `.harness/` | Replaced as a whole, byte for byte and mode for mode, with `VERSION` (revision and commit) and `CHECKSUMS` (one line per file: `<mode> <sha256> <path>`, mode `644` or `755`). Never merged or edited in place, so there is nothing to resolve. |
-| `dev`, bindings (`.claude/settings.json`, `.codex/hooks.json`, `.agents/hooks.json`), `CLAUDE.md` | Written when the root file is absent; never overwritten. A root file that exists and differs leaves part of the core unwired (finding K22: the dispatcher for `dev`, the guard hook of that client for a binding), so the sync stops before writing anything, names each file and what would stay unwired, and exits 1, unless `--keep-root <file>` names it. A kept file is reported with the same consequence, in the commit and the PR body. |
+| `dev`, bindings (`.claude/settings.json`, `.codex/hooks.json`, `.agents/hooks.json`), `CLAUDE.md` | Written when the root file is absent; never overwritten. A root file that exists and differs leaves part of the core unwired (finding K22: the dispatcher for `dev`, the guard hook of that client for a binding), so the sync stops before writing anything, names each file and what would stay unwired, and exits 1, unless `--keep-root <file>` names it. The commit and PR identify each retained customization and the wiring to verify. Redirected destinations and incorrect executable modes require repair before sync, including with `--keep-root`. |
 | `AGENTS.md` shared block | Replaced between the `harness:shared` markers when both are present once; otherwise reported. |
 | `AGENTS.md`, `.github/dependabot.yml` | The `STARTERS` mapping installs each missing file when the selected revision supplies its template. Existing starters are kept and reported. The sync also reports a kept `CLAUDE.md` missing its initial `@AGENTS.md`. |
 | Skill links | Install relative links in `.agents/skills/` and any real `.claude/skills/`. Preserve and report collisions. Remove retired core links. Report the directory-link command where Claude's directory is missing. |

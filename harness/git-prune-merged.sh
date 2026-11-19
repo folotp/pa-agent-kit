@@ -95,10 +95,12 @@ repo_slug=$(printf '%s\n' "$origin_url" | sed -E -n 's#^.*github\.com[:/]([^/]+/
 [ -n "$repo_slug" ] || stop "origin is not a GitHub remote: $origin_url"
 
 if [ "$all" = 1 ]; then
+  names=$(git for-each-ref --format='%(refname:short)' refs/heads/) || stop "cannot enumerate branches"
   while IFS= read -r b; do
+    [ -n "$b" ] || continue
     case " $protected " in *" $b "*) continue ;; esac
     branches+=("$b")
-  done < <(git for-each-ref --format='%(refname:short)' refs/heads/)
+  done <<<"$names"
 fi
 
 here=$(pwd -P)
@@ -143,11 +145,27 @@ for b in ${branches[@]+"${branches[@]}"}; do
     case "$here/" in
       "$wt_real"/*) refuse "$b" "run from another checkout: the current directory is inside its worktree $wt"; status=1; kept+=("$b"); continue ;;
     esac
-    if [ -d "$wt" ] && [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then
-      refuse "$b" "worktree $wt has uncommitted or untracked files"; status=1; kept+=("$b"); continue
+    if [ -d "$wt" ]; then
+      flags=$(git -C "$wt" ls-files -v) || {
+        refuse "$b" "cannot read worktree index"; status=1; kept+=("$b"); continue
+      }
+      if grep -Eq '^([a-z]|S) ' <<<"$flags"; then
+        refuse "$b" "index hides local changes"; status=1; kept+=("$b"); continue
+      fi
+      changes=$(git -C "$wt" -c core.fsmonitor=false -c core.untrackedCache=false status --porcelain --untracked-files=all --ignored --ignore-submodules=none) || {
+        refuse "$b" "cannot read worktree status"; status=1; kept+=("$b"); continue
+      }
+    else
+      changes=""
+    fi
+    if [ -n "$changes" ]; then
+      refuse "$b" "worktree $wt has uncommitted or untracked files (including ignored files)"; status=1; kept+=("$b"); continue
     fi
   fi
 
+  if [ "$(git rev-parse --verify "refs/heads/$b")" != "$tip" ]; then
+    refuse "$b" "tip changed during verification"; status=1; kept+=("$b"); continue
+  fi
   if [ "$dry_run" = 1 ]; then
     say "would prune $b (PR #$pr merged at ${tip:0:7})${wt:+, removing worktree $wt}"
     pruned+=("$b")
@@ -158,7 +176,14 @@ for b in ${branches[@]+"${branches[@]}"}; do
   elif [ -n "$wt" ]; then
     git worktree prune # the directory is already gone; drop its stale record
   fi
-  git branch -D "$b" >/dev/null
+  # Compare and delete in one ref transaction. A concurrent commit must survive.
+  remaining=$(git worktree list --porcelain) || stop "cannot verify remaining worktrees"
+  if grep -Fxq "branch refs/heads/$b" <<<"$remaining"; then
+    refuse "$b" "branch is checked out"; status=1; kept+=("$b"); continue
+  fi
+  git update-ref -d "refs/heads/$b" "$tip" || {
+    refuse "$b" "could not delete verified tip"; status=1; kept+=("$b"); continue
+  }
   say "pruned $b (PR #$pr merged at ${tip:0:7})${wt:+, worktree $wt removed}"
   pruned+=("$b")
 done

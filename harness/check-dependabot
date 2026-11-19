@@ -149,12 +149,21 @@ norm() {
   printf '%s' "$v"
 }
 
+if [ -n "$seen" ]; then
+  ok=""
+  for pattern in $covered; do
+    if segments_match "$(norm "$pattern")" ""; then ok=1; break; fi
+  done
+  [ -n "$ok" ] || add "$config: include / in the github-actions directories for workflow updates"
+fi
+
 if [ -d .github/actions ]; then
+  actions=$(find .github/actions -type f \( -name action.yml -o -name action.yaml \) | sort) || exit 1
   while IFS= read -r action; do
     [ -n "$action" ] || continue
     # A remote action: a `uses:` value that is neither local nor a docker image.
-    remote="$(awk '/^[[:space:]]*(-[[:space:]]+)?uses:/ { v = $0; sub(/^[^:]*:[[:space:]]*/, "", v); gsub(/["\047]/, "", v); if (v !~ /^(\.\/|docker:\/\/)/ && v != "") { print "yes"; exit } }' "$action")"
-    [ -n "$remote" ] || continue
+    remote=$("$(dirname "$0")/check-pins" --remote "$action") || { add "$action: cannot determine remote uses; check YAML"; continue; }
+    [ "$remote" = remote ] || continue
     dir="$(norm "$(dirname "$action")")"
     ok=""
     for pattern in $covered; do
@@ -164,9 +173,7 @@ if [ -d .github/actions ]; then
       fi
     done
     [ -n "$ok" ] || add "$action uses a remote action, but no github-actions entry of $config covers /$dir: list it under that entry's 'directories' (for example \"/\" and \"/.github/actions/*\")"
-  done <<EOF
-$(find .github/actions -type f \( -name action.yml -o -name action.yaml \) | sort)
-EOF
+  done <<<"$actions"
 fi
 
 [ -z "$findings" ] && exit 0

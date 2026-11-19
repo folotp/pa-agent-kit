@@ -118,25 +118,11 @@ token, which never shows:
 security add-generic-password -U -s github-owner-token -a folotp -T "" -w
 ```
 
-**Moving from `github-pa-token` (once, after the session-24h merge).** The item
-had another name before. The safest move that does not regenerate the token
-copies the value from one `security` process to the other, in PA's own
-terminal: the old item's dialog appears once (Allow); the value never reaches
-the screen, the clipboard, a file or the shell history (the history keeps the
-`$(…)` text, not the value); it is an argument of the second process while it
-runs (a fraction of a second, visible to PA's own processes only). No agent
-runs it.
+**Moving from the old owner item.** PA performs the migration in a private terminal. Keep the old item and its GitHub credential available throughout verification.
 
-```bash
-security add-generic-password -U -s github-owner-token -a folotp -T "" \
-  -w "$(security find-generic-password -s github-pa-token -a folotp -w)"
-security delete-generic-password -s github-pa-token -a folotp
-```
-
-To avoid even that argument, generate a new token on GitHub instead, type it at
-the prompt of the first command above, then revoke the old token on GitHub and
-delete the old item with the second line. Then check, as PA (one dialog):
-`.harness/gh-token.sh owner -- gh api user --jq .login` prints `folotp`.
+1. Create a replacement credential on GitHub with the approved owner scope. Enter it at the hidden prompt of the command above. Supply the value only at that prompt.
+2. Run `harness/gh-token.sh owner -- gh api user --jq .login` in the workshop. Choose **Allow** once. Verify the expected owner login. Repeat the read and verify that it prompts again. In the GitHub credential settings, compare the replacement’s repository selection and granted permissions with the approved owner prerequisite. An identity read alone verifies only the login. If either check fails, keep the old credential and repair the new item's account, access controls or scope.
+3. After verification, retire the old credential on GitHub and remove the old item in Keychain Access. Keep the verified `github-owner-token` item.
 
 ## One-time setup of the App keys (PA)
 

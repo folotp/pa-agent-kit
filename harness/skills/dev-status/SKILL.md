@@ -16,7 +16,7 @@ Reads local state and, as the bot, GitHub's; changes nothing.
 <core>/gh-token.sh <bot> -- <core>/commands next --online
 ```
 
-The token is the bot's ordinary one, not `--read-only`: GitHub shows draft releases only to a token that may write. The command itself only reads (`gh pr list`, `gh release list`, the prune script's `--all --dry-run`, `git ls-remote` of the public workshop). If the token cannot be minted (no Keychain item for the bot, a denied dialog), run `<core>/commands next` alone: it gives the offline items and says the online ones were skipped.
+The token is the bot's ordinary one, not `--read-only`: GitHub shows draft releases only to a token that may write. The command itself only reads (`gh pr list`, `gh release list`, the prune script's `--all --dry-run`, `git ls-remote` of the public workshop). If the token cannot be minted (no Keychain item for the bot, a denied dialog), run `<core>/commands next --online` without a token to report verified local items and the incomplete online check.
 
 ## Relay
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash -p
 # GitHub identities for agents on PA's Mac.
 #
 # Agents act on GitHub as their own GitHub App ("<slug>[bot]"), with a
@@ -48,17 +48,15 @@ die() {
 }
 
 usage() {
-  cat >&2 <<'EOF'
-Usage:
+  printf '%s\n' 'Usage:
   gh-token.sh <app> [--repo OWNER/NAME] [--read-only] -- CMD...  run CMD as the bot, then revoke
   gh-token.sh <app> [--repo OWNER/NAME] [--read-only] --info     print expiry and scope, no token
   gh-token.sh <app> [--repo OWNER/NAME] [--read-only] --print    print a token on stdout (never revoked here)
-  gh-token.sh owner -- CMD...                      run CMD with PA's token (prompts)
+  gh-token.sh owner -- CMD...                      run CMD with PA'\''s token (prompts)
 
 <app> is one of: claude, codex, antigravity.
 --repo defaults to the origin remote of the current directory.
---read-only narrows every permission of the token to read (the release gate's reads).
-EOF
+--read-only narrows every permission of the token to read (the release gate'\''s reads).' >&2
   exit 2
 }
 
@@ -80,7 +78,7 @@ b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 api() {
   local method=$1 path=$2 scheme=$3 cred=$4 body=${5:-} out status
   # --max-time: a request that hangs ends in a refusal, not a stuck command (Codex C23).
-  local -a args=(-sS --max-time 30 -X "$method" -H @- -H "Accept: application/vnd.github+json"
+  local -a args=(-q -sS --max-time 30 -X "$method" -H @- -H "Accept: application/vnd.github+json"
                  -H "X-GitHub-Api-Version: 2022-11-28" -w '\n%{http_code}')
   [[ -n $body ]] && args+=(-H "Content-Type: application/json" --data "$body")
   out=$(printf 'Authorization: %s %s\n' "$scheme" "$cred" | curl "${args[@]}" "$API$path") \
@@ -98,10 +96,15 @@ resolve_repo() {
   local repo=$1 url
   if [[ -z $repo ]]; then
     url=$(git remote get-url origin 2>/dev/null) || die "no --repo given and no origin remote here"
-    repo=${url#*github.com[:/]}
+    case "$url" in
+      https://github.com/*) repo=${url#https://github.com/} ;;
+      git@github.com:*) repo=${url#git@github.com:} ;;
+      ssh://git@github.com/*) repo=${url#ssh://git@github.com/} ;;
+      *) die "origin is not a GitHub repository URL" ;;
+    esac
     repo=${repo%.git}
   fi
-  [[ $repo =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || die "not an OWNER/NAME repository: $repo"
+  [[ $repo =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ && ${repo#*/} != . && ${repo#*/} != .. ]] || die "not an OWNER/NAME repository"
   printf '%s' "$repo"
 }
 
@@ -137,11 +140,12 @@ export_git_auth() {
 # installation holds is requested at level read (GitHub accepts a subset of the installation's
 # permissions, and refuses the request rather than widen one).
 token_request() {
-  if [[ -n $3 ]]; then
-    printf '%s' "$2" | jq -c --arg r "$1" '{repositories: [$r], permissions: (.permissions | map_values("read"))}'
-  else
-    jq -cn --arg r "$1" '{repositories: [$r]}'
-  fi
+  printf '%s' "$2" | jq -ces --arg repo "$1" --arg ro "$3" '
+    select(length == 1) | .[0] |
+    select((.id | type == "number" and . > 0 and floor == .) and
+           (.permissions | type == "object" and length > 0 and
+            all(.[]; . == "read" or . == "write" or . == "admin"))) |
+    {repositories: [$repo], permissions: (.permissions | if $ro == "" then . else map_values("read") end)}'
 }
 
 # The command PA runs once, in a terminal, to create the owner item: `-w` last prompts for the
@@ -171,7 +175,7 @@ run_as_owner() {
       "click Allow (never Always Allow) in the dialog for $OWNER_SERVICE"
   export_git_auth "$token"
   unset token
-  exec "$@"
+  PATH="${caller_path:-$PATH}" exec "$@"
 }
 
 main() {
@@ -219,23 +223,34 @@ main() {
   jwt=$(app_jwt "$client_id" "$pem")
   unset pem
   install_json=$(api GET "/repos/$repo/installation" Bearer "$jwt")
-  install_id=$(printf '%s' "$install_json" | jq -r '.id')
-  token_json=$(api POST "/app/installations/$install_id/access_tokens" Bearer "$jwt" \
-    "$(token_request "${repo#*/}" "$install_json" "$read_only")")
-  token=$(printf '%s' "$token_json" | jq -r '.token')
-  [[ -n $token && $token != null ]] || die "GitHub returned no token"
-
-  if [[ $mode == print ]]; then
-    unset token_json
-    printf '%s\n' "$token"
-    return 0
-  fi
-
-  # From here on, every exit revokes the token: an error, Ctrl-C, or the end.
+  local request
+  request=$(token_request "${repo#*/}" "$install_json" "$read_only") ||
+    die "invalid installation or permissions; no token requested"
+  install_id=$(printf '%s' "$install_json" | jq -er '.id | numbers | select(. > 0 and floor == .)') ||
+    die "missing installation id"
+  # Validate the serialized body separately. An empty body requests installation defaults.
+  printf '%s' "$request" | jq -es --arg repo "${repo#*/}" --arg ro "$read_only" --argjson installation "$install_json" '
+    length == 1 and (.[0] | keys == ["permissions","repositories"] and .repositories == [$repo]
+      and (.permissions | type == "object" and length > 0)
+      and .permissions == ($installation.permissions | if $ro == "" then . else map_values("read") end))' >/dev/null ||
+    die "invalid authorization request; no token requested"
+  token_json=$(api POST "/app/installations/$install_id/access_tokens" Bearer "$jwt" "$request")
+  token=$(printf '%s' "$token_json" | jq -er '.token | strings | select(test("^[A-Za-z0-9_.-]+$"))') ||
+    die "GitHub returned no usable token"
   minted_token=$token
   trap revoke_minted EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
+  printf '%s' "$token_json" | jq -es --arg repo "$repo" --argjson req "$request" '
+    length == 1 and (.[0] | .repository_selection == "selected" and
+      ([.repositories[].full_name | ascii_downcase] == [($repo | ascii_downcase)]) and
+      .permissions == $req.permissions and (.expires_at | fromdateiso8601 > now))' >/dev/null ||
+    die "GitHub returned unusable expiry or scope; refusing token"
+  if [[ $mode == print ]]; then
+    minted_token=""
+    printf '%s\n' "$token"
+    return 0
+  fi
 
   if [[ $mode == info ]]; then
     # Scope and expiry only: the token itself is never printed.
@@ -246,9 +261,9 @@ main() {
   unset token_json
 
   # exec: commit as the bot, run the command, revoke the token afterwards.
-  slug=$(api GET /app Bearer "$jwt" | jq -r '.slug')
+  slug=$(api GET /app Bearer "$jwt" | jq -er '.slug | strings | select(test("^[a-zA-Z0-9-]+$"))') || die "missing App identity"
   unset jwt
-  bot_id=$(api GET "/users/${slug}%5Bbot%5D" token "$token" | jq -r '.id')
+  bot_id=$(api GET "/users/${slug}%5Bbot%5D" token "$token" | jq -er '.id | numbers | select(. > 0 and floor == .)') || die "missing bot identity"
   export GIT_AUTHOR_NAME="${slug}[bot]" GIT_COMMITTER_NAME="${slug}[bot]"
   export GIT_AUTHOR_EMAIL="${bot_id}+${slug}[bot]@users.noreply.github.com"
   export GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL
@@ -256,11 +271,15 @@ main() {
   printf 'gh-token: running as %s[bot] on %s\n' "$slug" "$repo" >&2
 
   local rc=0
-  "$@" || rc=$?
+  PATH="${caller_path:-$PATH}" "$@" || rc=$?
   revoke_minted
   unset token GH_TOKEN
   return "$rc"
 }
 
 # Run only when executed, so tests can source the functions.
-if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  caller_path=$PATH
+  export PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin
+  main "$@"
+fi

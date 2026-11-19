@@ -125,12 +125,34 @@ def unwired(dest):
     return "the core's copy of this file"
 
 
+def check_destination(target, name, directory=False):
+    """Reject redirected or unusable destinations before starting the consumer branch."""
+    path = target / name
+    for parent in path.relative_to(target).parents:
+        ancestor = target / parent
+        if ancestor.is_symlink() or (ancestor.exists() and not ancestor.is_dir()):
+            raise SyncError(f"{name}: restore a repository directory at {parent}")
+    if path.is_symlink() or (path.exists() and not (path.is_dir() if directory else path.is_file())):
+        raise SyncError(f"{name}: restore a regular {'directory' if directory else 'file'} before syncing")
+
+
 def differing_roots(target, files):
-    """Root files that exist in the target and differ from their core template."""
-    return sorted(
-        dest for dest, source in root_files(files).items()
-        if (target / dest).exists() and (target / dest).read_bytes() != files[source][1]
-    )
+    different = []
+    check_destination(target, ".harness", directory=True)
+    for name, (_, aliases, _, _) in STARTERS.items():
+        for path in (name, *aliases):
+            check_destination(target, path)
+    for dest, source in root_files(files).items():
+        check_destination(target, dest)
+        path = target / dest
+        if not path.exists():
+            continue
+        mode, data = files[source]
+        if bool(path.stat().st_mode & 0o111) != bool(mode & 0o111) or (mode == 0o755 and not os.access(path, os.X_OK)):
+            raise SyncError(f"{dest}: restore template mode {mode:o} before syncing")
+        if path.read_bytes() != data:
+            different.append(dest)
+    return sorted(different)
 
 
 # Starting points, unlike root files: written only where the target has none of the given names,
@@ -197,8 +219,8 @@ def install(target, rev, commit, files, kept=()):
             if dest not in kept:
                 raise SyncError(f"{dest} differs from the core template and was not named with --keep-root")
             report.append(
-                f"- `{dest}` DIFFERS from the core template; kept by --keep-root, so {unwired(dest)} "
-                f"stays unwired (compare with `.harness/{source}`)")
+                f"- `{dest}` DIFFERS from the core template; kept by --keep-root. Verify {unwired(dest)} "
+                f"in the retained file (compare with `.harness/{source}`)")
 
     report.extend(write_when_absent(target, files))
 
@@ -246,10 +268,9 @@ def runs_dev_ci(target):
     workflows = target / ".github" / "workflows"
     if not workflows.is_dir():
         return False
-    return any(
-        re.search(r"(^|\s)\./dev ci(\s|$)", path.read_text(encoding="utf-8", errors="replace"), re.M)
-        for path in workflows.iterdir() if path.suffix in (".yml", ".yaml") and path.is_file()
-    )
+    # Recognize a standalone command at jobs.*.steps[*].run. Uncertain cases keep the advisory.
+    probe = WORKSHOP / "harness" / "check-pins"
+    return subprocess.run([str(probe), "--ci-step"], cwd=target, check=False).returncode == 0
 
 
 def main(argv):
@@ -282,7 +303,7 @@ def main(argv):
     # A differing root file leaves part of the core unwired (finding K22): refused unless named.
     refused = [dest for dest in differing_roots(target, files) if dest not in args.keep_root]
     if refused:
-        lines = "\n".join(f"  {dest}: {unwired(dest)} would stay unwired" for dest in refused)
+        lines = "\n".join(f"  {dest}: verify {unwired(dest)} before keeping this file" for dest in refused)
         raise SyncError(
             f"root files differ from the core templates at {args.rev}:\n{lines}\n"
             "Make each one the template (delete it and sync again, or merge the template into it), "

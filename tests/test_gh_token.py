@@ -38,7 +38,7 @@ class TokenRequestTest(unittest.TestCase):
         return json.loads(result.stdout)
 
     def test_default_request_is_limited_to_the_repository(self):
-        self.assertEqual(self.request(""), {"repositories": ["repo"]})
+        self.assertEqual(self.request(""), {"repositories": ["repo"], "permissions": json.loads(self.INSTALLATION)["permissions"]})
 
     def test_read_only_request_narrows_every_permission_to_read(self):
         self.assertEqual(
@@ -58,6 +58,12 @@ class ArgumentsTest(unittest.TestCase):
         result = self.run_script("claude", "--frobnicate")
         self.assertEqual(result.returncode, 2)
         self.assertIn("--read-only", result.stderr)
+
+    def test_usage_with_unusable_tmpdir(self):
+        result = subprocess.run([str(SCRIPT), "--help"], env={"PATH": SYSTEM_PATH, "TMPDIR": "/dev/null/no-dir"},
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Usage:", result.stderr)
 
     def test_printing_a_token_needs_print(self):
         """K24: no mode means usage, before any Keychain read; printing is asked for by name."""
@@ -84,7 +90,7 @@ api() {
   echo "$1 $2" >>"$LOG"
   case "$1 $2" in
     "GET /repos/"*) echo '{"id":1,"permissions":{"contents":"write"}}' ;;
-    "POST "*) echo '{"token":"tok","expires_at":"x","permissions":{},"repository_selection":"selected"}' ;;
+    "POST "*) echo '{"token":"tok","expires_at":"2099-01-01T00:00:00Z","repositories":[{"full_name":"o/r"}],"permissions":{"contents":"write"},"repository_selection":"selected"}' ;;
     "GET /app") echo '{"slug":"bot"}' ;;
     "GET /users/"*) echo '{"id":5}' ;;
   esac
@@ -110,6 +116,39 @@ class RevocationTest(unittest.TestCase):
 
     def calls(self):
         return self.log.read_text().splitlines() if self.log.exists() else []
+
+    def test_invalid_request_never_mints_or_starts_command(self):
+        for body in ("", "{}", '{"repositories":["another"],"permissions":{"contents":"read"}}'):
+            with self.subTest(body=body):
+                result = bash(STUBS + f"\ntoken_request() {{ printf '%s' '{body}'; }}\n"
+                              + "main codex --read-only -- touch started", LOG=str(self.log))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(any(c.startswith("POST") for c in self.calls()))
+
+    def test_invalid_installation_makes_no_post_and_bad_result_never_starts_command(self):
+        marker = self.dir / "started"
+        for before, after, should_post in [
+            ('"permissions":{"contents":"write"}', '"permissions":null', False),
+            ('"id":1', '"id":0', False),
+            ('"full_name":"o/r"', '"full_name":"other/r"', True),
+            ('"repository_selection":"selected"', '"repository_selection":"all"', True),
+            ('2099-01-01', '2000-01-01', True),
+        ]:
+            with self.subTest(after=after):
+                self.log.write_text("")
+                result = bash(STUBS.replace(before, after) + '\nmain codex -- touch "$MARKER"',
+                              LOG=str(self.log), MARKER=str(marker))
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(marker.exists())
+                self.assertEqual(any(line.startswith("POST ") for line in self.calls()), should_post)
+                self.assertEqual("DELETE /installation/token" in self.calls(), should_post)
+
+    def test_overbroad_response_is_revoked_before_use(self):
+        result = self.start("codex --read-only -- touch started")
+        result.communicate(timeout=30)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.dir / "started").exists())
+        self.assertIn("DELETE /installation/token", self.calls())
 
     def test_command_exit_status_is_kept_and_token_revoked(self):
         process = self.start("claude -- sh -c 'exit 7'")

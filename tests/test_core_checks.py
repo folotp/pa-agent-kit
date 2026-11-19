@@ -120,7 +120,7 @@ class DependabotCheckTest(unittest.TestCase):
             '    directories:\n    - /\n    - /.github/actions/*/\n',  # sequence at the key's indent
             '    directories: ["/", "/.github/actions/setup", "/.github/actions/deploy"]\n',
             "    directories:\n      - /\n      - /.github/**\n",
-            "    directories:\n      - '**/*'\n",
+            "    directories:\n      - /\n      - '**/*'\n",
         ):
             with self.subTest(directories):
                 self.assertPasses("version: 2\nupdates:\n" + entry(directories=directories), actions)
@@ -128,8 +128,14 @@ class DependabotCheckTest(unittest.TestCase):
     def test_a_glob_star_stays_within_one_segment(self):
         actions = {"group/setup/action.yml": REMOTE_ACTION}
         self.assertFindings([r"covers /\.github/actions/group/setup:"],
-                            "version: 2\nupdates:\n" + entry(directories='    directories:\n      - "/.github/actions/*"\n'), actions)
-        self.assertPasses("version: 2\nupdates:\n" + entry(directories='    directories:\n      - "/.github/actions/*/*"\n'), actions)
+                            "version: 2\nupdates:\n" + entry(directories='    directories:\n      - /\n      - "/.github/actions/*"\n'), actions)
+        self.assertPasses("version: 2\nupdates:\n" + entry(directories='    directories:\n      - /\n      - "/.github/actions/*/*"\n'), actions)
+
+    def test_workflow_root_and_flow_style_action_coverage(self):
+        text = "version: 2\nupdates:\n" + entry(directories="    directory: /.github/actions/setup\n")
+        self.assertFindings(["include /"], text)
+        self.assertFindings(["setup/action.yml uses a remote"], "updates:\n" + entry(),
+                            {"setup/action.yml": f"runs: {{steps: [{{uses: org/tool@{SHA}}}]}}\n"})
 
     def test_every_github_actions_entry_needs_its_cooldown(self):
         two = "version: 2\nupdates:\n" + entry() + "    target-branch: main\n" + entry(cooldown="") + "    target-branch: next\n"
@@ -215,6 +221,30 @@ class BindingCheckTest(unittest.TestCase):
                 self.assertTrue(lines[0].startswith(".agents/hooks.json does not call the core guard"), lines)
         self.place(root, ".agents/hooks.json", "{not json")
         self.assertEqual(self.run_in(root), (1, [".agents/hooks.json is not valid JSON: fix it, then merge the PreToolUse entry of .harness/bindings/.agents/hooks.json"]))
+
+    def test_inactive_registration_for_each_client(self):
+        root = self.consumer()
+        for name in self.FILES:
+            self.place(root, name)
+        for name in self.FILES:
+            data = json.loads((root / name).read_text())
+            section = next(iter(data))
+            for field, value in (("type", "prompt"), ("async", True), ("timeout", 0)):
+                invalid = json.loads(json.dumps(data))
+                invalid[section]["PreToolUse"][0]["hooks"][0][field] = value
+                self.place(root, name, json.dumps(invalid))
+                self.assertEqual(self.run_in(root)[0], 1, (name, field))
+            if name == ".agents/hooks.json":
+                group = data[section].copy()
+                group["enabled"] = False
+                self.place(root, name, json.dumps({"repository-guard": group}))
+                self.assertEqual(self.run_in(root)[0], 1)
+                group["enabled"] = True
+                self.place(root, name, json.dumps({"repository-guard": group}))
+                self.assertEqual(self.run_in(root)[0], 0)
+            self.place(root, name, json.dumps({"metadata": data}))
+            self.assertEqual(self.run_in(root)[0], 1, name)
+            self.place(root, name, json.dumps(data))
 
     def test_every_finding_is_reported_in_one_run(self):
         code, lines = self.run_in(self.consumer())

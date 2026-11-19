@@ -1,64 +1,84 @@
-#!/usr/bin/env bash
-# check-pins: refuses a GitHub Actions `uses:` that is not pinned to a full commit SHA (24g, D1).
-#
-# Usage: check-pins   (from the repository root; `./dev check` and `./dev ci` run it when .github/
-#                      exists)
-#
-# Why: a tag or a branch can be moved to other code. The repository setting 'Require actions to be
-# pinned to a full-length commit SHA' fails such a job only at run time; this fails it in
-# `./dev check`, before a push. Dependabot (`.github/dependabot.yml`) moves the pins.
-#
-# Reads .github/workflows/*.yml|*.yaml and every .github/actions/**/action.yml|action.yaml. A value
-# passes when it is a local action or reusable workflow (`./…`), ends in `@<40 lowercase hex>`
-# (actions, and reusable workflows at job level), or is a docker image pinned by digest
-# (`docker://…@sha256:<64 lowercase hex>`). Anything else fails, an empty value included.
-#
-# Text check, no YAML parser: a line whose first key is `uses:` (block style, with or without the
-# list dash) is read; the value stops at a YAML comment (` #`), and surrounding quotes are stripped.
-# A commented-out line is not read. Flow style (`- {uses: …}`) is not read: actionlint accepts it,
-# no repository of the family uses it.
-#
-# Output, one line per unpinned value, then exit 1; nothing and exit 0 when every value passes
-# (also when there is no .github/):
-#   <file>:<line>: <value> is not pinned: use the full commit SHA with a # vX.Y.Z comment
-#
-# Runs on macOS /bin/bash 3.2 and the system awk (no regex intervals: lengths are counted).
-set -euo pipefail
-export LC_ALL=C
+#!/usr/bin/env ruby
+# Inspect YAML nodes without constructing tagged Ruby objects or evaluating expressions.
+# Aliases, custom tags, complex keys and duplicates require an explicit, unambiguous declaration.
+require 'psych'
 
-# The awk program: its $0 and variables are awk's, not the shell's.
-# shellcheck disable=SC2016
-judge='
-function hex(s, n) { return length(s) == n && s ~ /^[0-9a-f]+$/ }
-function pinned(v,   ref) {
-  if (substr(v, 1, 2) == "./") return 1
-  if (v ~ /[[:space:]]/ || !match(v, /@[^@]*$/) || RSTART == 1) return 0
-  ref = substr(v, RSTART + 1)
-  if (v ~ /^docker:\/\//) return substr(ref, 1, 7) == "sha256:" && hex(substr(ref, 8), 64)
-  return hex(ref, 40)
-}
-/^[[:space:]]*(-[[:space:]]+)?uses:/ {
-  v = $0
-  sub(/^[[:space:]]*(-[[:space:]]+)?uses:/, "", v)
-  sub(/[[:space:]]#.*$/, "", v)
-  sub(/^[[:space:]]+/, "", v)
-  sub(/[[:space:]]+$/, "", v)
-  q = substr(v, 1, 1)
-  if (length(v) >= 2 && (q == "\"" || q == "\047") && substr(v, length(v), 1) == q) v = substr(v, 2, length(v) - 2)
-  if (!pinned(v)) printf "%s:%d: %s is not pinned: use the full commit SHA with a # vX.Y.Z comment\n", FILENAME, FNR, v
-}
-'
+BadYaml = Class.new(StandardError)
 
-files() {
-  if [ -d .github/workflows ]; then
-    find .github/workflows -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \)
-  fi
-  if [ -d .github/actions ]; then
-    find .github/actions -type f \( -name action.yml -o -name action.yaml \)
-  fi
-}
+def decode(node, uses)
+  return nil unless node
+  raise BadYaml, 'custom YAML tag' if node.tag
+  case node
+  when Psych::Nodes::Scalar
+    node.value
+  when Psych::Nodes::Sequence
+    node.children.map { |item| decode(item, uses) }
+  when Psych::Nodes::Mapping
+    node.children.each_slice(2).each_with_object({}) do |(key, value), fields|
+      raise BadYaml, 'complex mapping key' unless key.is_a?(Psych::Nodes::Scalar) && !key.tag
+      name = key.value
+      raise BadYaml, "ambiguous key #{name}" if name == '<<' || fields.key?(name)
+      fields[name] = decode(value, uses)
+      uses << [key.start_line + 1, fields[name]] if name == 'uses'
+    end
+  else
+    raise BadYaml, 'YAML alias'
+  end
+end
 
-found="$(files | sort | while IFS= read -r f; do awk "$judge" "$f"; done)"
-[ -z "$found" ] && exit 0
-printf '%s\n' "$found"
-exit 1
+def pinned?(value)
+  return false unless value.is_a?(String) && value !~ /\s/
+  return true if value.start_with?('./') && value.length > 2
+  return !!(value =~ /\Adocker:\/\/[^@]+@sha256:[0-9a-f]{64}\z/) if value.start_with?('docker://')
+  !!(value =~ /\A[^@]+@[0-9a-f]{40}\z/)
+end
+
+def ci_step?(workflow)
+  return false unless workflow.is_a?(Hash) && workflow['jobs'].is_a?(Hash)
+  workflow['jobs'].values.any? do |job|
+    next false unless job.is_a?(Hash) && !job.key?('if') && job['steps'].is_a?(Array)
+    job['steps'].any? do |step|
+      step.is_a?(Hash) && !step.key?('if') && !step.key?('uses') &&
+        !step.key?('working-directory') && !step.key?('shell') &&
+        !job.dig('defaults', 'run') && !workflow.dig('defaults', 'run') &&
+        step['run'].is_a?(String) && step['run'].strip == './dev ci'
+    end
+  end
+end
+
+mode = ARGV.shift
+files = Dir.glob('.github/workflows/*.{yml,yaml}')
+files += Dir.glob('.github/actions/**/action.{yml,yaml}') unless mode == '--ci-step'
+files = ARGV if mode == '--remote'
+failed = false
+found = false
+files.sort.each do |path|
+  begin
+    raise BadYaml, 'symbolic link' if File.symlink?(path)
+    stream = Psych.parse_stream(File.read(path))
+    raise BadYaml, 'multiple documents' if stream.children.size > 1
+    uses = []
+    document = decode(stream.children.first&.root, uses)
+    if mode == '--ci-step'
+      found ||= ci_step?(document)
+    elsif mode == '--remote'
+      found ||= uses.any? { |_, value| !value.is_a?(String) || !value.start_with?('./', 'docker://') }
+    else
+      uses.each do |line, value|
+        next if pinned?(value)
+        puts "#{path}:#{line}: #{value} is not pinned: use the full commit SHA with a # vX.Y.Z comment"
+        failed = true
+      end
+    end
+  rescue Psych::SyntaxError, BadYaml, SystemCallError, TypeError => error
+    puts "#{path}: #{error.message}; use explicit YAML keys and scalar action references" unless mode == '--ci-step'
+    failed = true
+  end
+end
+if mode == '--remote'
+  exit 2 if failed
+  puts(found ? 'remote' : 'local')
+elsif mode == '--ci-step'
+  exit(found ? 0 : 1)
+end
+exit(failed ? 1 : 0)
