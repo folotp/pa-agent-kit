@@ -158,6 +158,13 @@ class SyncTest(unittest.TestCase):
         self.assertIn("`AGENTS.md`: shared block replaced", result.stdout)
         self.assertNotIn("`CLAUDE.md` does not start with `@AGENTS.md`", result.stdout)
 
+    def test_the_workshops_agents_md_carries_the_current_shared_block(self):
+        """The workshop's own AGENTS.md holds the block the sync lays down everywhere."""
+        block = (ROOT / "harness" / "templates" / "AGENTS.shared.md").read_text().strip("\n")
+        text = (ROOT / "AGENTS.md").read_text()
+        self.assertIn(block, text)
+        self.assertLess(len(text.encode()), 24_000)
+
     def test_a_claude_md_that_does_not_import_agents_md_is_reported(self):
         (self.consumer / "CLAUDE.md").write_text("# Own rules\n")
         git(self.consumer, "add", "-A")
