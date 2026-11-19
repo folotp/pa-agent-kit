@@ -74,6 +74,10 @@ if [ -z "$tag" ]; then
 fi
 printf '%s\n' "$tag" | grep -Eq "$TAG_RE" || refuse "'$tag' is not a core tag (harness-vX.Y)" "/dev-harness-sync (the newest core tag)" 2
 
+# Without the wrapper, git and gh could silently use the local user's credentials.
+if [ -z "${GH_TOKEN:-}" ] || [[ ${GIT_AUTHOR_NAME:-} != *'[bot]' ]]; then
+  refuse "sync needs the GitHub App identity" ".harness/gh-token.sh <bot> -- .harness/harness-sync $tag"
+fi
 git fetch --quiet origin || refuse "git fetch origin failed (line above)" "check the network and the bot token, then /dev-harness-sync $tag"
 git rev-parse --verify --quiet origin/main >/dev/null || refuse "origin has no main branch" "/dev-help"
 

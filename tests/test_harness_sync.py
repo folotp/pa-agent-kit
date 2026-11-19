@@ -31,7 +31,7 @@ class HarnessSyncTest(unittest.TestCase):
             "HOME": str(self.tmp / "home"),
             "TMPDIR": str(self.tmp / "t"),
             "GH_LOG": str(self.tmp / "gh.log"),
-            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+            "GH_TOKEN": "fixture", "GIT_AUTHOR_NAME": "fixture[bot]", "GIT_AUTHOR_EMAIL": "t@example.invalid",
             "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
             "GIT_CONFIG_NOSYSTEM": "1",
         }
@@ -134,6 +134,22 @@ class HarnessSyncTest(unittest.TestCase):
         self.assert_ending(result, "nothing changed: already at core harness-v0.1")
         self.assertFalse((self.tmp / "gh.log").exists())
         self.assertEqual(self.git(self.origin, "branch", "--list", "harness-sync/*"), "")
+
+    def test_requires_the_bot_wrapper_before_contacting_the_consumer_origin(self):
+        for override in ({"GH_TOKEN": ""}, {"GIT_AUTHOR_NAME": "fixture"}):
+            with self.subTest(override=list(override)):
+                result = self.run_sync("harness-v0.2", **override)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(".harness/gh-token.sh <bot>", self.assert_ending(result, "refused"))
+                self.assertFalse((self.consumer / ".git/FETCH_HEAD").exists())
+
+    def test_checks_the_synced_version_on_origin_main(self):
+        # A feature branch's VERSION must never suppress the PR main still needs.
+        self.git(self.consumer, "switch", "-qc", "feature")
+        (self.consumer / ".harness/VERSION").write_text("core harness-v0.2\n")
+        result = self.run_sync("harness-v0.2")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("PR opened", result.stdout)
 
     def test_refusals_change_nothing(self):
         cases = [
