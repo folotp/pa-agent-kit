@@ -124,6 +124,33 @@ class SyncTest(unittest.TestCase):
         self.assertTrue((self.consumer / ".codex" / "hooks.json").is_file())
         self.assertIn("`.claude/skills` is not the symlink", result.stdout)
 
+    def test_installs_verifies_and_retires_only_core_skill_links(self):
+        agents = self.consumer / ".agents/skills"
+        claude = self.consumer / ".claude/skills"
+        for directory in (agents, claude):
+            directory.mkdir(parents=True)
+            (directory / "dev-retired").symlink_to("../../.harness/skills/dev-retired")
+            (directory / "dev-own").symlink_to("../own")
+        (claude / "dev-help").mkdir()
+        git(self.consumer, "add", "-A")
+        git(self.consumer, "commit", "-qm", "consumer skills")
+        result = self.sync()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("kept .claude/skills/dev-help", result.stdout)
+        self.assertFalse((claude / "dev-help").is_symlink())
+        check = self.consumer / ".harness/skill-links"
+        self.assertNotEqual(subprocess.run([check], cwd=self.consumer, capture_output=True).returncode, 0)
+        (claude / "dev-help").rmdir()
+        (claude / "dev-help").symlink_to("../../.harness/skills/dev-help")
+        for directory in (agents, claude):
+            self.assertFalse((directory / "dev-retired").is_symlink())
+            self.assertEqual(os.readlink(directory / "dev-own"), "../own")
+            for source in (self.consumer / ".harness/skills").iterdir():
+                self.assertEqual(os.readlink(directory / source.name), f"../../.harness/skills/{source.name}")
+        subprocess.run([check], cwd=self.consumer, check=True)
+        (agents / "dev-help").unlink()
+        self.assertNotEqual(subprocess.run([check], cwd=self.consumer, capture_output=True).returncode, 0)
+
     def test_dependabot_template_is_written_only_when_absent(self):
         """24g D2: a starting point, never compared once the repository has its own."""
         result = self.sync()

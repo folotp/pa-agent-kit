@@ -22,7 +22,8 @@ What it writes in the target, on a new branch `harness-sync/<rev>`, in one commi
      not read the shared block.
   3. The shared block of `AGENTS.md` (between `harness:shared:begin` and `harness:shared:end`):
      replaced when both markers are present, otherwise reported.
-  4. The `.claude/skills` symlink is only checked and reported.
+  4. Link core skills into .agents/skills and any real .claude/skills directory.
+     Report collisions, retire obsolete core links, and report a missing Claude directory link.
   5. A CI workflow is never written (a bot cannot push one): when no workflow runs `./dev ci`, the
      report names `templates/ci.yml` and PA's push.
 `harness.toml` and `mise.toml` belong to the consumer and are never touched.
@@ -218,8 +219,15 @@ def install(target, rev, commit, files, kept=()):
         report.append("- `CLAUDE.md` does not start with `@AGENTS.md`: Claude Code does not read `AGENTS.md` (and its "
                       "shared block) while `CLAUDE.md` exists; make `@AGENTS.md` its first line (as `.harness/templates/CLAUDE.md`)")
 
+    if "skill-links" in files:
+        links = subprocess.run([str(harness / "skill-links"), "--install"], cwd=target,
+                               capture_output=True, text=True)
+        if links.returncode:
+            raise SyncError(f"skill link installation failed: {links.stderr.strip()}")
+        report.extend(f"- {line}" for line in links.stdout.splitlines())
+
     link = target / ".claude" / "skills"
-    if not (link.is_symlink() and os.readlink(link) == "../.agents/skills"):
+    if not link.exists() and not link.is_symlink():
         report.append(f"- `.claude/skills` is not the symlink to `../.agents/skills`; not changed. To create it: `{SKILLS_COMMAND}`")
 
     if not runs_dev_ci(target):

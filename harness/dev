@@ -256,6 +256,7 @@ core_checks() {
     "$here/check-pins" || failed="$failed pins"
     "$here/check-dependabot" || failed="$failed dependabot"
   fi
+  "$here/skill-links" || failed="$failed skill-links"
   "$here/check-bindings" || failed="$failed bindings"
   [ -z "$failed" ] || die "core checks failed:$failed (each line above names the file and the fix)" "fix each line above, then ./dev check (.harness/README.md, 'Core checks')"
   printf '%-12s %s\n' core-checks ok

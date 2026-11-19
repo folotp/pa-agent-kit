@@ -54,7 +54,7 @@ class FixtureRepo:
         test.addCleanup(shutil.rmtree, self.dir, True)
         (self.dir / "harness").mkdir()
         shutil.copy2(ROOT / "dev", self.dir / "dev")
-        for name in ("dev", "conf.awk", "gate", "check-pins", "check-dependabot", "check-bindings"):
+        for name in ("dev", "conf.awk", "gate", "check-pins", "check-dependabot", "check-bindings", "skill-links"):
             shutil.copy2(ROOT / "harness" / name, self.dir / "harness" / name)
         # The guard bindings, so that the binding check (24g F5) passes as in the workshop.
         shutil.copytree(ROOT / "harness" / "bindings", self.dir / "harness" / "bindings")

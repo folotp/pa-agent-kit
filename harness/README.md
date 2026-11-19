@@ -20,6 +20,7 @@
 
 - **Pins** (`check-pins`): every `uses:` in `.github/workflows/` and `.github/actions/**/action.yml` names a full 40-character commit SHA, with the version in a comment (`@<sha> # v7.0.1`); a local `./` action and a digest-pinned `docker://` image pass.
 - **Dependabot** (`check-dependabot`): with workflows, `.github/dependabot.yml` has a `github-actions` entry with `cooldown: default-days:` of 7 or more, and lists every local action that calls a remote one under `directories` (for example `"/"` and `"/.github/actions/*"`). Schedule, groups and prefix are the repository's.
+- **Skill links** (`skill-links`) verifies discovery links against the synced skill directories and reports missing, conflicting or retired links.
 - **Guard bindings** (`check-bindings`): `.claude/settings.json`, `.codex/hooks.json` and `.agents/hooks.json` each call `.harness/guard`. A repository with its own file merges the `PreToolUse` entry of `.harness/bindings/<file>` into it; until then the check fails on purpose, because the agent would otherwise run without the guard.
 
 ## What the sync writes, and what it leaves to the repository

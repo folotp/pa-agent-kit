@@ -791,7 +791,7 @@ class ReleaseFixture:
         git(self.dir, "clone", "-q", str(self.origin), str(self.work))
         git(self.work, "checkout", "-q", "-b", "main")
         (self.work / "harness").mkdir()
-        for name in ("gate", "conf.awk", "dev", "gh-token.sh", "check-pins", "check-dependabot", "check-bindings"):
+        for name in ("gate", "conf.awk", "dev", "gh-token.sh", "check-pins", "check-dependabot", "check-bindings", "skill-links"):
             shutil.copy2(ROOT / "harness" / name, self.work / "harness" / name)
         shutil.copytree(ROOT / "harness" / "githooks", self.work / "harness" / "githooks")
         # The guard bindings, as in the workshop, so that `./dev check`'s binding check (24g F5) passes.
