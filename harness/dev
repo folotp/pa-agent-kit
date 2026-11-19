@@ -2,7 +2,7 @@
 # dev: the core dispatcher. Every verb runs under `mise exec`, so tools come from the pinned
 # versions in mise.toml and never from the shell. Contract and rules: docs/harness-core.md.
 #
-# Usage: ./dev setup | check | ci | gate [<sha>] | apply|deploy [args…] | x <command…> | <verb> [args…]
+# Usage: ./dev setup | check | ci | update-local-repo | gate [<sha>] | apply|deploy [args…] | x <command…> | <verb> [args…]
 # `gate` and the release verb (`apply` or `deploy`, named in harness.toml) belong to harness/gate.
 #
 # Layout: this file is <root>/harness/dev (or <root>/.harness/dev in a repository that syncs the
@@ -67,6 +67,63 @@ if [ "${1:-}" = "setup" ]; then
       die "cannot set core.hooksPath to $hooks_path (the agent sandbox cannot write .git/config)" "./dev setup, in PA's own terminal" "run ./dev setup in your own terminal"
   fi
   exec "$self" check
+fi
+
+# `update-local-repo` (24i row I5d, the skill /dev-update-local-repo): bring the main checkout's
+# `main` up to GitHub's, then reinstall and prune. Steps: refuse, changing nothing, when the main
+# checkout (the first `git worktree list` entry) is not on main, has uncommitted or untracked
+# files, or its main has commits origin/main lacks after the fetch; fetch; fast-forward main
+# (`pull --ff-only`, from the fetched ref); `./dev setup` (tools, hooks, then check); prune merged
+# branches with the prune script's --all when a bot token is in GH_TOKEN (the skill runs this verb
+# under `gh-token.sh <bot> --`); without one it says so and names /dev-delete-merged-branches.
+# A restart is asked for only when the pull changed agent files or plugins. Idempotent: a second
+# run fast-forwards nothing and says "already up to date". Runs before the mise re-run below, so a
+# pull that changes mise.lock is installed by setup rather than refused by `mise exec --locked`.
+update_local_repo() {
+  local main_wt before after count changed setup_out prune_out prune_done="" left="nothing" agent_paths
+  [ "$#" -eq 0 ] || die "usage: ./dev update-local-repo" "/dev-update-local-repo"
+  main_wt="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
+  { [ -n "$main_wt" ] && cd "$main_wt"; } || die "cannot find the main checkout" "/dev-update-local-repo"
+  [ "$(git symbolic-ref -q --short HEAD || true)" = main ] ||
+    die "the main checkout $main_wt is not on main" "git -C $main_wt switch main, then /dev-update-local-repo"
+  [ -z "$(git status --porcelain)" ] ||
+    die "the main checkout $main_wt has uncommitted or untracked files" "commit them on a branch or remove them, then /dev-update-local-repo" "decide what to keep of the changes in $main_wt"
+  git fetch --quiet origin || die "git fetch origin failed (line above)" "check the network and the remote, then /dev-update-local-repo"
+  count="$(git rev-list --count origin/main..main)"
+  [ "$count" = 0 ] ||
+    die "local main has $count commit(s) that origin/main lacks: they would be lost or merged" "git log origin/main..main, then move them to a branch" "decide what happens to those commits"
+  before="$(git rev-parse HEAD)"
+  git merge --ff-only --quiet origin/main || die "the fast-forward of main failed (line above)" "/dev-update-local-repo"
+  after="$(git rev-parse HEAD)"
+  if [ "$before" = "$after" ]; then
+    changed="already up to date at ${after:0:7}"
+  else
+    changed="main fast-forwarded ${before:0:7}..${after:0:7} ($(git rev-list --count "$before..$after") commit(s))"
+    agent_paths="$(git diff --name-only "$before" "$after" -- AGENTS.md CLAUDE.md .claude .agents .codex .harness/skills harness/skills plugins .claude-plugin | head -1)"
+    [ -z "$agent_paths" ] || left="restart the agent session (in Claude Code, /reload-plugins is enough for plugins): agent files or plugins changed"
+  fi
+  echo "update-local-repo: $changed"
+  setup_out="$("$main_wt/$(basename "$(dirname "$self")")/dev" setup 2>&1)" || {
+    printf '%s\n' "$setup_out" >&2
+    die "./dev setup failed after the pull (lines above); main stays at ${after:0:7}" "fix what it reports, then ./dev setup" "${left/#nothing/run ./dev setup once it is fixed}"
+  }
+  echo "update-local-repo: ./dev setup passed"
+  if [ -n "${GH_TOKEN:-}" ]; then
+    prune_out="$("$(dirname "$self")/git-prune-merged.sh" --all 2>&1)" || true
+    printf '%s\n' "$prune_out" | grep -v -e '^done: ' -e '^left for PA: ' -e '^next: ' || true
+    prune_done="$(printf '%s\n' "$prune_out" | sed -n 's/^done: //p')"
+    case "$prune_out" in
+      *"KEEP "*) if [ "$left" = nothing ]; then left="decide each KEEP line above"; else left="$left; decide each KEEP line above"; fi ;;
+    esac
+    ending "$changed; setup passed; branches: ${prune_done:-not checked}" "$left" "/dev-status"
+  else
+    ending "$changed; setup passed; merged branches not checked (no bot token in GH_TOKEN)" "$left" "/dev-delete-merged-branches --all (it runs as your bot)"
+  fi
+  exit 0
+}
+if [ "${1:-}" = "update-local-repo" ]; then
+  shift
+  update_local_repo "$@"
 fi
 
 # The release verbs re-run themselves from a clean environment (harness/gate). They are handed
@@ -266,6 +323,6 @@ EOF
     done <<EOF
 $verbs
 EOF
-    die "usage: ./dev setup | check | ci | gate [<sha>] | apply|deploy [args…] | x <command…> | <verb of harness.toml> [args…]" "/dev-help (every command, with what it does)"
+    die "usage: ./dev setup | check | ci | update-local-repo | gate [<sha>] | apply|deploy [args…] | x <command…> | <verb of harness.toml> [args…]" "/dev-help (every command, with what it does)"
     ;;
 esac

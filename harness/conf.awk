@@ -40,7 +40,7 @@ function bad(why) { printf "dev: harness.toml:%d: %s\n", NR, why > "/dev/stderr"
     print "check\t" key "\t" val
   } else if (section == "verbs") {
     if (kind != "s") bad("a verb is a string")
-    if (index(" setup check ci gate apply deploy x ", " " key " ")) bad("verb name is reserved: " key)
+    if (index(" setup check ci update-local-repo gate apply deploy x ", " " key " ")) bad("verb name is reserved: " key)
     print "verb\t" key "\t" val
   } else if (section == "gate") {
     if (!((kind == "s" && index(" repo merger verb release ci checks_app ", " " key " ")) ||

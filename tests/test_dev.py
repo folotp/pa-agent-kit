@@ -164,7 +164,7 @@ class DispatcherTest(unittest.TestCase):
     def test_unknown_verb_prints_usage(self):
         result = run_dev(ROOT, "frobnicate")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("usage: ./dev setup | check | ci | gate [<sha>] | apply|deploy", result.stderr)
+        self.assertIn("usage: ./dev setup | check | ci | update-local-repo | gate [<sha>] | apply|deploy", result.stderr)
 
     @unittest.skipIf(
         any(os.access(p, os.X_OK) for p in MISE_LOCATIONS),
@@ -377,6 +377,94 @@ class HooksTest(unittest.TestCase):
         self.git(self.clone, "config", "core.hooksPath", "/elsewhere/hooks")
         result = run_dev(self.clone, "check", env=self.env)
         self.assertIn("core.hooksPath is '/elsewhere/hooks'", result.stderr)
+
+
+class UpdateLocalRepoTest(unittest.TestCase):
+    """`./dev update-local-repo` (24i row I5d), from a clone of a bare origin: refuses, changing
+    nothing, on a dirty main checkout, on local commits origin lacks, or off main; fast-forwards,
+    runs setup, prunes through the prune script only with a bot token, asks for a restart only when
+    agent files changed, and says "already up to date" on a second run."""
+
+    def git(self, cwd, *args, check=True):
+        return subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(cwd), *args],
+            env=self.env, capture_output=True, text=True, timeout=120, check=check,
+        )
+
+    def setUp(self):
+        source = FixtureRepo(self, 'profile = "plugin"\ntools = ["python3"]\n')
+        shutil.copytree(ROOT / "harness" / "githooks", source.dir / "harness" / "githooks")
+        # A stand-in for the prune script: the wiring is tested here, the script in its own file.
+        stub = source.dir / "harness" / "git-prune-merged.sh"
+        stub.write_text('#!/bin/sh\necho "prune-stub $*"\necho "done: pruned 1: feat/x"\necho "left for PA: nothing"\necho "next: /dev-status"\n')
+        stub.chmod(0o755)
+        self.dir = Path(tempfile.mkdtemp(prefix="dev-update."))
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.clone = self.dir / "clone"
+        self.other = self.dir / "other"
+        self.env = clean_env(MISE_TRUSTED_CONFIG_PATHS=f"{source.dir}:{self.clone}")
+        self.git(source.dir, "init", "-q", "-b", "main")
+        self.git(source.dir, "add", "-A")
+        self.git(source.dir, "commit", "-q", "-m", "fixture")
+        self.git(self.dir, "clone", "-q", "--bare", str(source.dir), str(self.dir / "origin.git"))
+        self.git(self.dir, "clone", "-q", str(self.dir / "origin.git"), str(self.clone))
+        self.git(self.dir, "clone", "-q", str(self.dir / "origin.git"), str(self.other))
+
+    def upstream_commit(self, path="notes.txt"):
+        target = self.other / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(target.read_text() + "x\n" if target.exists() else "x\n")
+        self.git(self.other, "add", "-A")
+        self.git(self.other, "commit", "-q", "-m", f"upstream {path}")
+        # The stand-in for GitHub's merge: pushed without the core hooks, which refuse main.
+        subprocess.run(["git", "-C", str(self.other), "push", "-q", "origin", "HEAD:refs/heads/main"],
+                       env=clean_env(hooks=False), check=True, capture_output=True)
+
+    def update(self, **extra):
+        return run_dev(self.clone, "update-local-repo", env={**self.env, **extra})
+
+    def test_fast_forward_setup_and_idempotence(self):
+        self.upstream_commit()
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("update-local-repo: main fast-forwarded", result.stdout)
+        self.assertIn("update-local-repo: ./dev setup passed", result.stdout)
+        self.assertEqual(self.git(self.clone, "rev-parse", "HEAD").stdout, self.git(self.other, "rev-parse", "HEAD").stdout)
+        lines = result.stdout.splitlines()
+        self.assertTrue(lines[-3].endswith("merged branches not checked (no bot token in GH_TOKEN)"))
+        self.assertEqual(lines[-2], "left for PA: nothing")
+        self.assertEqual(lines[-1], "next: /dev-delete-merged-branches --all (it runs as your bot)")
+        again = self.update()
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertIn("update-local-repo: already up to date", again.stdout)
+
+    def test_prunes_with_a_bot_token_and_asks_for_a_restart_after_agent_files_change(self):
+        self.upstream_commit("AGENTS.md")
+        result = self.update(GH_TOKEN="x")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("prune-stub --all", result.stdout)
+        lines = result.stdout.splitlines()
+        self.assertTrue(lines[-3].endswith("setup passed; branches: pruned 1: feat/x"), lines[-3])
+        self.assertTrue(lines[-2].startswith("left for PA: restart the agent session"))
+        self.assertEqual(lines[-1], "next: /dev-status")
+
+    def test_refusals_change_nothing(self):
+        self.upstream_commit()
+        before = self.git(self.clone, "rev-parse", "HEAD").stdout
+        (self.clone / "scratch.txt").write_text("x\n")
+        result = self.update()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("has uncommitted or untracked files", result.stderr)
+        self.assertIn("done: refused; nothing changed", result.stderr)
+        (self.clone / "scratch.txt").unlink()
+        self.git(self.clone, "commit", "-q", "--allow-empty", "-m", "local only")
+        result = self.update()
+        self.assertIn("local main has 1 commit(s) that origin/main lacks", result.stderr)
+        self.git(self.clone, "reset", "-q", "--hard", before.strip())
+        self.git(self.clone, "switch", "-q", "-c", "feat/y")
+        result = self.update()
+        self.assertIn("is not on main", result.stderr)
+        self.assertEqual(self.git(self.clone, "rev-parse", "main").stdout, before)
 
 
 if __name__ == "__main__":

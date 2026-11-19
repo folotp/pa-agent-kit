@@ -11,6 +11,7 @@
 | `setup` | Installs the pinned tools of `mise.toml` and the core's git hooks. Once per clone, in PA's own terminal (the agent sandbox cannot write `.git/config`). |
 | `check` | Tools under mise, `.harness/` against its checksums, the git hooks, the core checks below, then the repository's own offline `check`. Before every commit. |
 | `ci` | The same, then every check of `harness.toml`'s `[checks]`, in order. Before every push; CI runs it too. |
+| `update-local-repo` | Brings the main checkout's `main` up to GitHub's (fetch, fast-forward only), runs `setup`, prunes merged branches (with a bot token), and says when the agent must restart. Refuses, changing nothing, on uncommitted files or local commits GitHub lacks. `/dev-update-local-repo` runs it as your bot. |
 | `gate`, `apply` / `deploy` | The release gate, in a repository with a `[gate]` table (`/dev-check-release-readiness`). |
 | `x <command…>` | Any command under the pinned tools. |
 | `<verb>` | The repository's own verbs, from `harness.toml`'s `[verbs]`. |
