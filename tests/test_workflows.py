@@ -8,6 +8,7 @@ pass rule is also run, with jq, on the results GitHub would hand it.
 import json
 import re
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -139,53 +140,88 @@ class WriteTokenWorkflowTest(unittest.TestCase):
         self.assertLess(steps[-1].index('"specs.lock" ]'), steps[-1].index("push origin"))
 
 
-PINNED = re.compile(r"@[0-9a-f]{40}$")
-DOCKER_DIGEST = re.compile(r"^docker://\S+@sha256:[0-9a-f]{64}$")
+CHECK_PINS = Path(__file__).resolve().parents[1] / "harness" / "check-pins"
+SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1"
+REFUSAL = "is not pinned: use the full commit SHA with a # vX.Y.Z comment"
 
 
-def unpinned_actions(text):
-    """Return the `uses:` values of a workflow that name no full commit SHA.
-
-    A step's `uses:` is pinned when it ends in `@<40 hex>`; a local action (`./...`) has
-    no remote code to move, and a docker image is pinned by a `sha256` digest. Comments
-    (`# v7.0.1` after the SHA, or a commented-out line) are not part of the value."""
-    found = []
-    for line in text.splitlines():
-        match = re.match(r"^\s*(?:-\s+)?uses:\s*(\S+)", line)
-        if not match:
-            continue
-        value = match.group(1)
-        if value.startswith("./") or PINNED.search(value) or DOCKER_DIGEST.match(value):
-            continue
-        found.append(value)
-    return found
+def check_pins(root):
+    """Run the core pin check (harness/check-pins, 24g D1) from `root`; return (exit code, stdout)."""
+    result = subprocess.run([str(CHECK_PINS)], cwd=root, capture_output=True, text=True, timeout=30)
+    return result.returncode, result.stdout
 
 
 class PinnedActionsTest(unittest.TestCase):
-    """Every action is pinned to a full commit SHA: a tag or branch can be moved to other
-    code, and the repository setting 'Require actions to be pinned to a full-length commit SHA'
-    fails such a job at run time. This fails it earlier, in `./dev ci`. Dependabot
-    (`.github/dependabot.yml`) moves the pins."""
+    """The core check harness/check-pins, the one implementation of the pin rule: every `uses:`
+    names a full commit SHA, because a tag or branch can be moved to other code, and the
+    repository setting 'Require actions to be pinned to a full-length commit SHA' fails such a
+    job only at run time. `./dev check` runs it; Dependabot (`.github/dependabot.yml`) moves the pins."""
 
-    def test_every_workflow_action_is_pinned_to_a_full_sha(self):
-        for path in sorted(WORKFLOWS.glob("*.y*ml")):
-            with self.subTest(workflow=path.name):
-                self.assertEqual(unpinned_actions(path.read_text()), [])
+    def unpinned(self, text, path=".github/workflows/w.yml"):
+        """The values check-pins refuses in one file holding `text`, in a scratch repository."""
+        with tempfile.TemporaryDirectory() as root:
+            target = Path(root) / path
+            target.parent.mkdir(parents=True)
+            target.write_text(text)
+            code, out = check_pins(root)
+        values = [line.split(": ", 1)[1].rsplit(f" {REFUSAL}", 1)[0] for line in out.splitlines()]
+        self.assertEqual(code, 1 if values else 0, out)
+        for line in out.splitlines():
+            self.assertTrue(line.startswith(f"{path}:") and line.endswith(REFUSAL), line)
+        return values
+
+    def test_every_workflow_action_of_this_repository_is_pinned(self):
+        self.assertEqual(check_pins(WORKFLOWS.parent.parent), (0, ""))
+
+    def test_no_github_directory_passes(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(check_pins(root), (0, ""))
 
     def test_the_check_tells_a_pin_from_a_movable_reference(self):
-        sha = "3d3c42e5aac5ba805825da76410c181273ba90b1"
         digest = "a" * 64
-        self.assertEqual(unpinned_actions(f"      - uses: actions/checkout@{sha} # v7.0.1\n"), [])
-        self.assertEqual(unpinned_actions(f"        uses: actions/checkout@{sha}\n"), [])
-        self.assertEqual(unpinned_actions("      - uses: ./.github/actions/local\n"), [])
-        self.assertEqual(unpinned_actions(f"      - uses: docker://alpine@sha256:{digest}\n"), [])
-        self.assertEqual(unpinned_actions("      # - uses: actions/checkout@v4\n"), [])
-        self.assertEqual(unpinned_actions("      - uses: actions/checkout@v4\n"), ["actions/checkout@v4"])
-        self.assertEqual(unpinned_actions("      - uses: actions/checkout@main # latest\n"), ["actions/checkout@main"])
-        self.assertEqual(unpinned_actions("      - uses: docker://alpine:3.20\n"), ["docker://alpine:3.20"])
+        self.assertEqual(self.unpinned(f"      - uses: actions/checkout@{SHA} # v7.0.1\n"), [])
+        self.assertEqual(self.unpinned(f"        uses: actions/checkout@{SHA}\n"), [])
+        self.assertEqual(self.unpinned("      - uses: ./.github/actions/local\n"), [])
+        self.assertEqual(self.unpinned(f"      - uses: docker://alpine@sha256:{digest}\n"), [])
+        self.assertEqual(self.unpinned("      # - uses: actions/checkout@v4\n"), [])
+        self.assertEqual(self.unpinned("      - uses: actions/checkout@v4\n"), ["actions/checkout@v4"])
+        self.assertEqual(self.unpinned("      - uses: actions/checkout@main # latest\n"), ["actions/checkout@main"])
+        self.assertEqual(self.unpinned("      - uses: docker://alpine:3.20\n"), ["docker://alpine:3.20"])
+        self.assertEqual(self.unpinned(f"      - uses: docker://alpine@sha256:{digest[:63]}\n"), [f"docker://alpine@sha256:{digest[:63]}"])
         # A short or truncated SHA can be ambiguous or moved by a new object: refused.
-        self.assertEqual(unpinned_actions(f"      - uses: actions/checkout@{sha[:39]}\n"), [f"actions/checkout@{sha[:39]}"])
-        self.assertEqual(unpinned_actions(f"      - uses: actions/checkout@{sha}0\n"), [f"actions/checkout@{sha}0"])
+        self.assertEqual(self.unpinned(f"      - uses: actions/checkout@{SHA[:39]}\n"), [f"actions/checkout@{SHA[:39]}"])
+        self.assertEqual(self.unpinned(f"      - uses: actions/checkout@{SHA}0\n"), [f"actions/checkout@{SHA}0"])
+        self.assertEqual(self.unpinned(f"      - uses: actions/checkout@{SHA.upper()}\n"), [f"actions/checkout@{SHA.upper()}"])
+        self.assertEqual(self.unpinned("      - uses:\n"), [""])
+
+    def test_quotes_are_stripped(self):
+        self.assertEqual(self.unpinned(f'      - uses: "actions/checkout@{SHA}" # v7.0.1\n'), [])
+        self.assertEqual(self.unpinned(f"      - uses: 'actions/checkout@{SHA}'\n"), [])
+        self.assertEqual(self.unpinned('      - uses: "actions/checkout@v4"\n'), ["actions/checkout@v4"])
+
+    def test_a_reusable_workflow_at_job_level_is_judged(self):
+        text = (
+            "jobs:\n"
+            f"  pinned:\n    uses: octo/org/.github/workflows/ci.yml@{SHA} # v1.0.0\n"
+            "  local:\n    uses: ./.github/workflows/local.yml\n"
+            "  moving:\n    uses: octo/org/.github/workflows/ci.yml@main\n"
+        )
+        self.assertEqual(self.unpinned(text), ["octo/org/.github/workflows/ci.yml@main"])
+
+    def test_a_local_composite_action_is_read(self):
+        text = "runs:\n  using: composite\n  steps:\n    - uses: actions/setup-python@v6\n"
+        self.assertEqual(self.unpinned(text, ".github/actions/setup/action.yml"), ["actions/setup-python@v6"])
+        self.assertEqual(self.unpinned(text, ".github/actions/nested/deep/action.yaml"), ["actions/setup-python@v6"])
+        # Only workflows and action files are read.
+        self.assertEqual(self.unpinned(text, ".github/actions/setup/README.yml"), [])
+
+    def test_line_numbers_point_at_the_value(self):
+        with tempfile.TemporaryDirectory() as root:
+            workflow = Path(root) / ".github" / "workflows" / "ci.yaml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(f"jobs:\n  a:\n    steps:\n      - uses: actions/checkout@{SHA}\n      - uses: actions/cache@v4\n")
+            code, out = check_pins(root)
+        self.assertEqual((code, out), (1, f".github/workflows/ci.yaml:5: actions/cache@v4 {REFUSAL}\n"))
 
 
 if __name__ == "__main__":

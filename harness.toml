@@ -13,7 +13,7 @@ tools = ["python3", "shellcheck", "actionlint"]
 [checks]
 unit-tests = "python3 -B -m unittest discover -s tests -v"
 marketplace = "python3 -B scripts/validate-marketplace.py"
-shellcheck = "shellcheck dev harness/dev harness/templates/dev harness/gate harness/guard harness/gh-token.sh harness/githooks/* tools/probes/*.sh"
+shellcheck = "shellcheck dev harness/dev harness/templates/dev harness/gate harness/guard harness/check-pins harness/gh-token.sh harness/githooks/* tools/probes/*.sh"
 actionlint = "actionlint"
 
 # Own verbs, `./dev <name> [args]`. `./dev specs update` is the only online one: the weekly job and

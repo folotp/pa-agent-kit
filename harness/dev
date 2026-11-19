@@ -175,6 +175,19 @@ run_check() {
   bash -o pipefail -c "$1" </dev/null
 }
 
+# The core's own checks of the repository (24g: D1 pins), offline text checks next to this file.
+# Each prints one line per finding and exits non-zero; every check runs, so one pass shows all of
+# them, then any finding fails `check` and `ci`.
+core_checks() {
+  local here failed=""
+  here="$(dirname "$self")"
+  if [ -d .github ]; then
+    "$here/check-pins" || failed="$failed pins"
+  fi
+  [ -z "$failed" ] || die "core checks failed:$failed (each line above names the file and the fix)"
+  printf '%-12s %s\n' core-checks ok
+}
+
 cmd="${1:-}"
 case "$cmd" in
   check)
@@ -184,6 +197,7 @@ case "$cmd" in
     verify_hooks
     print_tools
     printf '%-12s %s\n' hooks "$hooks_path"
+    core_checks
     # The repository's own offline check (harness.toml `check`): it must contact nothing.
     if [ -n "$check_command" ]; then
       run_check "$check_command" || die "check failed: $check_command"
@@ -194,6 +208,7 @@ case "$cmd" in
     verify_tools
     verify_core
     print_tools
+    core_checks
     if [ -n "$check_command" ]; then
       echo "== check"
       run_check "$check_command" || die "check failed: $check_command"

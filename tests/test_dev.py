@@ -54,7 +54,7 @@ class FixtureRepo:
         test.addCleanup(shutil.rmtree, self.dir, True)
         (self.dir / "harness").mkdir()
         shutil.copy2(ROOT / "dev", self.dir / "dev")
-        for name in ("dev", "conf.awk", "gate"):
+        for name in ("dev", "conf.awk", "gate", "check-pins"):
             shutil.copy2(ROOT / "harness" / name, self.dir / "harness" / name)
         for name in ("mise.toml", "mise.lock"):
             shutil.copy2(ROOT / name, self.dir / name)
@@ -225,6 +225,38 @@ class VerbsAndCheckTest(unittest.TestCase):
         result = run_dev(fixture.dir, "ci", env=fixture.env)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertLess(result.stdout.index("OFFLINE-CHECK-RAN"), result.stdout.index("== first"))
+
+
+class CoreChecksTest(unittest.TestCase):
+    """`./dev check` and `./dev ci` run the core's repository checks (24g D1); each check's own
+    cases are in its test (pins: tests/test_workflows.py)."""
+
+    TOML = 'profile = "plugin"\ntools = ["python3"]\n[checks]\nfirst = "echo one"\n'
+    SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1"
+
+    def fixture_with_workflow(self, uses):
+        fixture = FixtureRepo(self, self.TOML)
+        workflow = fixture.dir / ".github" / "workflows" / "ci.yml"
+        workflow.parent.mkdir(parents=True)
+        workflow.write_text(f"jobs:\n  a:\n    steps:\n      - uses: {uses}\n")
+        return fixture
+
+    def test_an_unpinned_action_fails_check_and_ci(self):
+        fixture = self.fixture_with_workflow("actions/checkout@v4")
+        for verb in ("check", "ci"):
+            with self.subTest(verb):
+                result = run_dev(fixture.dir, verb, env=fixture.env)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(".github/workflows/ci.yml:4: actions/checkout@v4 is not pinned", result.stdout)
+                self.assertIn("core checks failed: pins", result.stderr)
+
+    def test_pinned_actions_pass(self):
+        fixture = self.fixture_with_workflow(f"actions/checkout@{self.SHA} # v7.0.1")
+        for verb in ("check", "ci"):
+            with self.subTest(verb):
+                result = run_dev(fixture.dir, verb, env=fixture.env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("core-checks  ok", result.stdout)
 
 
 class HooksTest(unittest.TestCase):

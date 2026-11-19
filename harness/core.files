@@ -5,6 +5,7 @@ dev
 conf.awk
 gate
 guard
+check-pins
 gh-token.sh
 gh-token.md
 core.files
