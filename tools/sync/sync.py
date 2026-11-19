@@ -153,9 +153,11 @@ STARTERS = {
 
 
 def write_when_absent(target, files):
-    """Write each starter of STARTERS the target lacks; return one report line per starter."""
+    """Install missing starters supplied by the selected revision and report each one."""
     report = []
     for dest, (source, aliases, written, kept) in STARTERS.items():
+        if source not in files:
+            continue
         present = [name for name in (dest, *aliases) if (target / name).exists()]
         if present:
             report.append(f"- `{present[0]}` kept as it is ({kept})")
@@ -230,7 +232,7 @@ def install(target, rev, commit, files, kept=()):
     if not link.exists() and not link.is_symlink():
         report.append(f"- `.claude/skills` is not the symlink to `../.agents/skills`; not changed. To create it: `{SKILLS_COMMAND}`")
 
-    if not runs_dev_ci(target):
+    if "templates/ci.yml" in files and not runs_dev_ci(target):
         report.append(
             "- No workflow under `.github/workflows/` runs `./dev ci`: copy `.harness/templates/ci.yml` to "
             "`.github/workflows/ci.yml`; PA pushes that commit with the owner token (`/dev-run-with-owner-token`: "

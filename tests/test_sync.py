@@ -54,9 +54,9 @@ class SyncTest(unittest.TestCase):
         git(self.consumer, "add", "-A")
         git(self.consumer, "commit", "-q", "-m", "init")
 
-    def sync(self, *extra, target=None):
+    def sync(self, *extra, target=None, rev="harness-v0.1"):
         return subprocess.run(
-            ["python3", "-B", str(self.workshop / "tools" / "sync" / "sync.py"), "harness-v0.1", str(target or self.consumer), *extra],
+            ["python3", "-B", str(self.workshop / "tools" / "sync" / "sync.py"), rev, str(target or self.consumer), *extra],
             capture_output=True, text=True, env=GIT_ENV,
         )
 
@@ -75,6 +75,22 @@ class SyncTest(unittest.TestCase):
         self.assertTrue(any(line.startswith("644 ") and line.endswith(" VERSION") for line in lines))
         self.assertTrue(any(line.endswith(" githooks/pre-push") and line.startswith("755 ") for line in lines))
         self.assertIn("commit ", (self.consumer / ".harness" / "VERSION").read_text())
+
+    def test_revision_without_starters_syncs_into_a_fresh_consumer(self):
+        templates = ("AGENTS.md", "dependabot.yml", "ci.yml")
+        git(self.workshop, "rm", *(f"harness/templates/{name}" for name in templates))
+        git(self.workshop, "commit", "-qm", "fixture without starter templates")
+        historical = git(self.workshop, "rev-parse", "HEAD").strip()
+        git(self.workshop, "revert", "--no-edit", historical)
+
+        result = self.sync(rev=historical)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(git(self.consumer, "rev-list", "--count", "main..HEAD").strip(), "1")
+        self.assertEqual(git(self.consumer, "status", "--porcelain"), "")
+        self.assertTrue((self.consumer / ".harness/dev").is_file())
+        for path in ("AGENTS.md", ".github/dependabot.yml"):
+            self.assertFalse((self.consumer / path).exists())
+        self.assertNotIn(".harness/templates/ci.yml", result.stdout)
 
     def test_files_are_read_by_the_resolved_commit(self):
         """Codex C6: after resolving <rev> once, no git call names it again, so a tag that moves
