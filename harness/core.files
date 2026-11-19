@@ -11,6 +11,7 @@ check-bindings
 gh-token.sh
 gh-token.md
 git-prune-merged.sh
+commands
 README.md
 core.files
 bindings/
