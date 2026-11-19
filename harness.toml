@@ -14,7 +14,8 @@ tools = ["python3", "shellcheck", "actionlint"]
 unit-tests = "python3 -B -m unittest discover -s tests -v"
 marketplace = "python3 -B scripts/validate-marketplace.py"
 shellcheck = "shellcheck dev harness/dev harness/templates/dev harness/gate harness/guard harness/check-pins harness/check-dependabot harness/check-bindings harness/gh-token.sh harness/githooks/* tools/probes/*.sh"
-actionlint = "actionlint"
+# The workflows, and the consumers' CI skeleton (never under .github/workflows/ here).
+actionlint = "actionlint && actionlint harness/templates/ci.yml"
 
 # Own verbs, `./dev <name> [args]`. `./dev specs update` is the only online one: the weekly job and
 # PA run it; nothing else resolves an upstream source.

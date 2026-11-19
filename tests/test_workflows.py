@@ -151,6 +151,46 @@ def check_pins(root):
     return result.returncode, result.stdout
 
 
+class CiTemplateTest(unittest.TestCase):
+    """harness/templates/ci.yml (24g W6): the consumers' CI skeleton. Never written by the sync;
+    actionlint reads it through harness.toml's check, these hold its contracts."""
+
+    TEMPLATE = Path(__file__).resolve().parents[1] / "harness" / "templates" / "ci.yml"
+
+    def setUp(self):
+        self.text = self.TEMPLATE.read_text()
+        self.job = jobs(self.text)["checks"]
+
+    def test_mise_is_pinned_exactly_as_in_the_workshop(self):
+        workshop = jobs((WORKFLOWS / "validate.yml").read_text())["validate"]
+        for key in ("MISE_VERSION", "MISE_SHA256"):
+            with self.subTest(key):
+                pattern = re.compile(rf"^\s+{key}: (\S+)$", re.M)
+                self.assertEqual(pattern.search(self.job).group(1), pattern.search(workshop).group(1))
+
+    def test_one_job_with_no_write_permission_and_no_kept_credential(self):
+        self.assertEqual(list(jobs(self.text)), ["checks"])
+        self.assertIn("\npermissions: {}\n", self.text)
+        self.assertIn("    permissions:\n      contents: read\n", self.job)
+        self.assertIn("persist-credentials: false", self.job)
+        self.assertRegex(self.job, r"\n    timeout-minutes: \d+\n")
+        self.assertIn("    name: Core checks\n", self.job)
+
+    def test_it_runs_setup_then_ci(self):
+        self.assertLess(self.job.index("run: ./dev setup"), self.job.index("run: ./dev ci"))
+
+    def test_its_actions_pass_the_pin_check(self):
+        with tempfile.TemporaryDirectory() as root:
+            target = Path(root) / ".github" / "workflows" / "ci.yml"
+            target.parent.mkdir(parents=True)
+            target.write_text(self.text)
+            self.assertEqual(check_pins(root), (0, ""))
+
+    def test_it_describes_the_aggregate_pattern(self):
+        for needle in ("if: always()", "needs: [", "needs.*.result"):
+            self.assertIn(needle, self.text)
+
+
 class PinnedActionsTest(unittest.TestCase):
     """The core check harness/check-pins, the one implementation of the pin rule: every `uses:`
     names a full commit SHA, because a tag or branch can be moved to other code, and the

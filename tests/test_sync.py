@@ -158,6 +158,26 @@ class SyncTest(unittest.TestCase):
         self.assertIn("`AGENTS.md`: shared block replaced", result.stdout)
         self.assertNotIn("`CLAUDE.md` does not start with `@AGENTS.md`", result.stdout)
 
+    def test_ci_template_is_reported_never_written(self):
+        """24g W6: a workflow file in the sync commit would make the bot's push fail."""
+        line = "No workflow under `.github/workflows/` runs `./dev ci`: copy `.harness/templates/ci.yml`"
+        result = self.sync()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(line, result.stdout)
+        self.assertIn("PA pushes that commit with the owner token (`/dev-run-with-owner-token`", result.stdout)
+        self.assertFalse((self.consumer / ".github" / "workflows").exists())
+
+        self.setUp()
+        own = self.consumer / ".github" / "workflows" / "build.yaml"
+        own.parent.mkdir(parents=True)
+        own.write_text("jobs:\n  a:\n    steps:\n      - run: ./dev ci\n")
+        git(self.consumer, "add", "-A")
+        git(self.consumer, "commit", "-q", "-m", "own ci")
+        result = self.sync()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(line, result.stdout)
+        self.assertEqual(sorted(p.name for p in own.parent.iterdir()), ["build.yaml"])
+
     def test_the_workshops_agents_md_carries_the_current_shared_block(self):
         """The workshop's own AGENTS.md holds the block the sync lays down everywhere."""
         block = (ROOT / "harness" / "templates" / "AGENTS.shared.md").read_text().strip("\n")

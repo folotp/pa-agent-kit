@@ -23,6 +23,8 @@ What it writes in the target, on a new branch `harness-sync/<rev>`, in one commi
   3. The shared block of `AGENTS.md` (between `harness:shared:begin` and `harness:shared:end`):
      replaced when both markers are present, otherwise reported.
   4. The `.claude/skills` symlink is only checked and reported.
+  5. A CI workflow is never written (a bot cannot push one): when no workflow runs `./dev ci`, the
+     report names `templates/ci.yml` and PA's push.
 `harness.toml` and `mise.toml` belong to the consumer and are never touched.
 
 With `--pr` the branch is pushed and one PR is opened with `gh`, its body holding the report. The
@@ -219,7 +221,25 @@ def install(target, rev, commit, files, kept=()):
     link = target / ".claude" / "skills"
     if not (link.is_symlink() and os.readlink(link) == "../.agents/skills"):
         report.append(f"- `.claude/skills` is not the symlink to `../.agents/skills`; not changed. To create it: `{SKILLS_COMMAND}`")
+
+    if not runs_dev_ci(target):
+        report.append(
+            "- No workflow under `.github/workflows/` runs `./dev ci`: copy `.harness/templates/ci.yml` to "
+            "`.github/workflows/ci.yml`; PA pushes that commit with the owner token (`/dev-run-with-owner-token`: "
+            "a bot cannot push a workflow file), then makes `Core checks` a required check")
     return report
+
+
+def runs_dev_ci(target):
+    """Whether a workflow of the target runs `./dev ci` (24g W6: the CI template is reported,
+    never written, because a workflow file in the sync commit would make the bot's push fail)."""
+    workflows = target / ".github" / "workflows"
+    if not workflows.is_dir():
+        return False
+    return any(
+        re.search(r"(^|\s)\./dev ci(\s|$)", path.read_text(encoding="utf-8", errors="replace"), re.M)
+        for path in workflows.iterdir() if path.suffix in (".yml", ".yaml") and path.is_file()
+    )
 
 
 def main(argv):
