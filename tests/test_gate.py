@@ -197,6 +197,14 @@ class CleanTreeTest(GateTestCase):
                 self.assertRefused(self.f.run("gate_clean_tree"), "ignored file that mise would load")
                 shutil.rmtree(self.f.work / ".config", True) if name.startswith(".config") else path.unlink()
 
+    def test_individual_ignored_names_are_matched_without_line_splitting(self):
+        (self.f.work / ".gitignore").write_text("generated/\n")
+        self.f.commit("ignore generated")
+        generated = self.f.work / "generated"
+        generated.mkdir()
+        (generated / "new\nline.auto.tfvars").touch()
+        self.assertRefused(self.f.run("gate_clean_tree"), "ignored file that the release would load")
+
     def test_ignored_files_that_the_release_loads_are_refused(self):
         (self.f.work / "zone.auto.tfvars").write_text("")
         self.assertRefused(self.f.run("gate_clean_tree"), "ignored file that the release would load: zone.auto.tfvars")
@@ -239,6 +247,22 @@ class CiTest(GateTestCase):
         if runs is not None:
             self.f.gh(path, runs)
         return self.f.run(f"conf_ci={mode} conf_checks_app={app} conf_required='{required}'; gate_ci {sha}")
+
+    def test_workflow_filter_binds_branch_event_and_sha(self):
+        import json
+        sha = self.f.sha
+        row = dict(path="ci", status="completed", conclusion="success", head_sha=sha, event="push", head_branch="main")
+        stub = 'gh() { jq -r "${!#}" "$FIX/raw"; }\n'
+        for change in [{}, {"head_branch": "side"}, {"event": "workflow_dispatch"}, {"head_sha": "0"*40}]:
+            (self.f.fix / "raw").write_text(json.dumps({"workflow_runs": [dict(row, **change)]}))
+            result = self.f.run(stub + f"conf_ci=workflow-runs conf_checks_app=; gate_ci {sha}")
+            self.assertEqual(result.returncode, int(bool(change)), result.stderr)
+
+    def test_expiration_stays_failed_even_if_term_handler_succeeds(self):
+        script = """cooperative() { trap 'exit 0' TERM; while :; do sleep 1; done; }
+gate_deadline=1
+with_deadline cooperative"""
+        self.assertEqual(self.f.run(script).returncode, 124)
 
     def test_green_runs_pass_in_both_modes(self):
         self.assertPassed(self.ci("ci\tgithub-actions\tcompleted\tsuccess\nlint\tother\tcompleted\tskipped\n"), "CI green")
@@ -386,10 +410,12 @@ class BaselineTest(GateTestCase):
         self.assertRefused(self.f.run("take_lock"), f"another release of this clone is running (pid {os.getpid()})")
         self.assertEqual(os.readlink(self.record / "lock"), str(os.getpid()), "a refused run leaves the owner's lock")
 
-    def test_lock_of_a_gone_process_is_taken_over_and_released_on_exit(self):
+    def test_stale_lock_requires_manual_recovery(self):
         self.lock_to("999999")
-        self.assertPassed(self.f.run('take_lock; [ "$(readlink "$record_dir/lock")" = "$$" ]'), "taking over a lock")
-        self.assertFalse(os.path.lexists(self.record / "lock"))
+        self.assertRefused(self.f.run("take_lock"), "stale release lock")
+        self.assertEqual(os.readlink(self.record / "lock"), "999999")
+        (self.record / "lock").unlink()
+        self.assertPassed(self.f.run("take_lock"))
 
     def test_lock_that_is_not_a_pid_link_is_refused_not_removed(self):
         (self.record / "lock").mkdir(parents=True)
@@ -400,6 +426,25 @@ class BaselineTest(GateTestCase):
         self.lock_to(str(os.getpid()))
         self.assertPassed(self.f.run("set_record_dir; lock_held=1; release_lock"))
         self.assertEqual(os.readlink(self.record / "lock"), str(os.getpid()))
+
+    def test_termination_holds_lock_until_foreground_operation_finishes(self):
+        marker = self.f.dir / "running"
+        finished = self.f.dir / "finish"
+        script = f"""take_lock
+/bin/sh -c 'touch "{marker}"; while [ ! -f "{finished}" ]; do sleep 0.05; done'"""
+        proc = subprocess.Popen(["/bin/bash", "-c", PRELUDE + script], cwd=self.f.work,
+                                env=base_env(FIX=str(self.f.fix)), start_new_session=True)
+        try:
+            until = time.monotonic() + 5
+            while not marker.exists() and time.monotonic() < until:
+                time.sleep(0.02)
+            self.assertTrue(marker.exists())
+            proc.terminate()
+            self.assertRefused(self.f.run("take_lock"), "another release")
+        finally:
+            finished.touch()
+            proc.wait(timeout=5)
+        self.assertFalse(os.path.lexists(self.record / "lock"))
 
     def test_last_changed_during_the_run_is_not_overwritten(self):
         self.record.mkdir()
@@ -452,6 +497,15 @@ class GuardedDiffTest(GateTestCase):
         record = self.f.work / ".git" / "dev-deploy"
         record.mkdir()
         (record / "last").write_text(self.first + "\n")
+
+    def test_unparseable_record_refuses_before_guarded_path_selection(self):
+        policy = self.f.work / "harness.toml"
+        policy.write_text("[broken\n")
+        old = self.f.commit("old policy")
+        (self.f.work / ".git/dev-deploy/last").write_text(old + "\n")
+        policy.write_text(SOURCED_GATE)
+        sha = self.f.commit("current policy")
+        self.assertRefused(self.f.run(f"gate_guarded_diff {sha}"), "cannot read historical")
 
     def test_unchanged_guarded_files_need_no_terminal(self):
         (self.f.work / "a.txt").write_text("b\n")
@@ -579,7 +633,7 @@ class OutputRuleTest(GateTestCase):
     def test_no_token_names_the_read_only_bot_form(self):
         result = self.f.run("need_gh_token")
         self.assertRefused(result, "no GitHub token")
-        self.assertEnds(result.stderr, "refused", "nothing", "gh-token.sh claude --read-only -- ./dev")
+        self.assertEnds(result.stderr, "refused", "nothing", "gh-token.sh <bot> --read-only -- ./dev")
 
     def test_a_missing_baseline_names_pas_baseline_command(self):
         result = self.f.run(f"gate_since_last {self.f.sha}")
@@ -708,15 +762,10 @@ class CleanReRunTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("no GitHub token", result.stderr)
 
-    def test_hand_typed_second_stage_is_refused(self):
-        result = ScriptFixture(self, GOOD_GATE).run("--stage2", "deploy", GIT_SSH_COMMAND="x")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("GIT_SSH_COMMAND is set after the clean re-run", result.stderr)
-
-    def test_variable_named_in_keep_env_is_kept(self):
-        fixture = ScriptFixture(self, GOOD_GATE + 'keep_env = ["READ_TOKEN"]\n')
-        result = fixture.run("--stage2", "deploy", READ_TOKEN="x")
-        self.assertIn("no GitHub token", result.stderr)
+    def test_retired_internal_entry_cannot_start_a_release(self):
+        result = ScriptFixture(self, GOOD_GATE).run("--stage2", "deploy")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("usage:", result.stderr)
 
 
 # --- The normal release entry point, end to end (Codex C22) -------------------------------------
@@ -814,6 +863,10 @@ class ReleaseFixture:
         for name, text in files.items():
             (self.work / name).write_text(text)
         (self.work / "release.sh").chmod(0o755)
+        gate = self.work / "harness" / "gate"
+        stub = fake_bin / "gh"
+        stub.write_text(stub.read_text().replace("$GATE_TEST_FIX", str(self.fix)))
+        gate.write_text(gate.read_text().replace(" gh api --paginate", f' "{stub}" api --paginate'))
         self.first = self.commit("first")
         subprocess.run(
             [next(m for m in MISE_LOCATIONS if os.access(m, os.X_OK)), "trust", str(self.work / "mise.toml")], env={**os.environ, "MISE_STATE_DIR": str(self.state)},
@@ -893,7 +946,7 @@ class EndToEndTest(unittest.TestCase):
         result = self.f.release()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("the mise configuration sets variables: GH_TOKEN", result.stderr)
-        self.assertEqual(self.f.order(), [])
+        self.assertTrue(all(line.startswith("gh ") for line in self.f.order()))
 
     def test_env_section_in_the_global_configuration_is_refused(self):
         home = self.f.dir / "home"
@@ -922,6 +975,25 @@ class EndToEndTest(unittest.TestCase):
                 result = self.f.release(**extra)
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn("not exactly the ones gh-token.sh sets", result.stderr)
+
+    def test_foreign_config_triggers_no_git_read_from_the_gate(self):
+        gate = self.f.work / "harness/gate"
+        trace = self.f.dir / "git-trace"
+        gate.write_text(gate.read_text().replace('  main "$@"',
+                        f'  git() {{ echo git >> "{trace}"; command git "$@"; }}\n  main "$@"'))
+        result = self.f.release(GIT_CONFIG_COUNT="0")
+        self.assertIn("not exactly the ones", result.stderr)
+        self.assertFalse(trace.exists())
+
+    def test_readiness_entry_distinguishes_history_from_head(self):
+        for args, expected in [([self.sha], "for HEAD"), ([], "next: ./dev deploy")]:
+            result = subprocess.run([str(self.f.work / "dev"), "gate", *args], cwd=self.f.work,
+                                    env={"HOME": str(self.f.dir), "PATH": SYSTEM_PATH, **git_auth_env()},
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(expected, result.stdout)
+            if args:
+                self.assertNotIn("next: ./dev deploy", result.stdout)
 
     def test_missing_git_entries_are_refused(self):
         env = {k: v for k, v in git_auth_env().items() if k == "GH_TOKEN"}

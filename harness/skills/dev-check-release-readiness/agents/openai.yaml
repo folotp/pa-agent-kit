@@ -1,5 +1,5 @@
 interface:
   display_name: "Check release readiness"
-  short_description: "Can this commit be released? The gate's checks"
+  short_description: "Check HEAD readiness or historical CI and PR provenance"
 policy:
   allow_implicit_invocation: false

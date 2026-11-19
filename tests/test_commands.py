@@ -193,8 +193,16 @@ class CommandsTest(unittest.TestCase):
                                       "left for PA: nothing", "next: /dev-help"])
 
     def test_online_without_a_token_says_so(self):
-        self.assertEqual(self.run_commands("next", "--online"), 0)
+        self.assertEqual(self.run_commands("next", "--online"), 1)
         self.assertIn("online checks skipped: no bot token in GH_TOKEN: /dev-status", self.out)
+
+    def test_partial_status_keeps_verified_pull_requests(self):
+        (self.work / "open_prs").write_text("7\ttrue\tReview me\thttps://example.invalid/7\n")
+        (self.work / "releases").unlink()
+        self.assertEqual(self.run_commands("next", "--online", GH_TOKEN="fixture"), 1)
+        self.assertIn("PR #7", self.out)
+        self.assertIn("draft-releases", self.out)
+        self.assertNotIn("nothing waits", self.out)
 
     def test_online_items(self):
         (self.work / "open_prs").write_text("7\ttrue\tWork in progress\thttps://github.com/example/demo/pull/7\n"

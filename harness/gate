@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash -p
 # gate: the release gate of the harness core, shared by every repository that changes a live
 # system. A commit is released only when the tree is clean, HEAD is the tip of main on GitHub, CI
 # is green for that exact commit, it descends from the last released commit and every change to
@@ -17,8 +17,12 @@
 # globals (conf_*, gate_sha, last_released). Runs on macOS /bin/bash 3.2.
 set -euo pipefail
 
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  export -n GH_TOKEN
+  unset GITHUB_TOKEN CDPATH
+  export PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin
+fi
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-self="$here/$(basename "${BASH_SOURCE[0]}")"
 root="$(cd "$here/.." && pwd)"
 
 # Every refusal ends with what happened, what is left for PA and the one next step (24i's output
@@ -50,15 +54,9 @@ refuse() {
 # then records nothing.
 NOTHING_RELEASED=3
 
-# Variables that reach the second stage: everything else is dropped before mise starts. The gate
-# reads GitHub with the bot token that gh-token.sh sets (GH_TOKEN, and the GIT_CONFIG_* entries
-# that let `git fetch` use it), through the proxy on a proxied network. harness.toml adds the
-# variables its release command needs (keep_env).
+# The process environment retained for local verification. Authentication is held privately.
 keep_base='HOME USER LOGNAME TMPDIR TERM LANG LC_ALL LC_CTYPE MISE_STATE_DIR'
-keep_gate='GH_TOKEN GIT_CONFIG_COUNT GIT_CONFIG_KEY_[0-9] GIT_CONFIG_VALUE_[0-9]'
-keep_gate+=' HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy'
-# Set by bash, macOS and mise exec themselves in the second stage.
-keep_added='PATH PWD OLDPWD SHLVL _ __CF_USER_TEXT_ENCODING __MISE_*'
+keep_proxy='HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy'
 
 # --- Settings: the [gate] table of harness.toml, through conf.awk ---------------------------
 
@@ -86,11 +84,6 @@ EOF
   [[ "$conf_verb" =~ ^(apply|deploy)$ ]] || die "harness.toml [gate]: verb is apply or deploy, not '$conf_verb'"
   [[ "$conf_release" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "$conf_release" != *..* ]] && [ -x "$root/$conf_release" ] ||
     die "harness.toml [gate]: release '$conf_release' is not an executable file of the repository"
-  # Tracked, as a regular executable file (mode 100755), and not a symbolic link: what runs is
-  # what the clean-tree check and the guarded diff cover (Codex C12).
-  [ -f "$root/$conf_release" ] && [ ! -L "$root/$conf_release" ] &&
-    [ "$(git -C "$root" ls-files -s -- "$conf_release" | awk '{print $1}')" = 100755 ] ||
-    die "harness.toml [gate]: release '$conf_release' is not a tracked regular executable file (git mode 100755)"
   case "$conf_ci" in
     check-runs) [[ "$conf_checks_app" =~ ^[A-Za-z0-9-]+$ ]] || die "harness.toml [gate]: check-runs needs checks_app" ;;
     workflow-runs) [ -z "$conf_checks_app" ] || die "harness.toml [gate]: checks_app is for check-runs only" ;;
@@ -104,49 +97,54 @@ EOF
   case " $conf_tools " in *" gh "*) ;; *) die "harness.toml: tools must include gh (the gate reads GitHub with it)" ;; esac
 }
 
-# --- The two stages of a release --------------------------------------------------------------
-
-# Keeps only the exported variables whose names match one of the case patterns in $1, drops
-# exported shell functions, then execs the command. Values never go through argv (`ps` shows argv
-# to every user). A variable that cannot be cleared stops everything.
-exec_clean() {
+# A candidate may name environment needed by the release. Keep those values in private
+# shell variables while checking provenance. Restore them only for approved repository code.
+prepare_entry() {
   local v p ok
-  local -a pats
-  read -r -a pats <<<"$1"
-  shift
+  release_names=()
+  release_values=()
+  for v in $conf_keep_env; do
+    case "$v" in PATH|GIT_*|GH_*|GITHUB_*|BASH*|ENV|LD_*|DYLD_*|IFS|CDPATH|SHELLOPTS)
+      refuse "unsafe keep_env name $v" ;;
+    esac
+    if declare -p "$v" >/dev/null 2>&1; then release_names+=("$v"); release_values+=("${!v}"); fi
+  done
+  unset gate_token
+  gate_token=${GH_TOKEN:-}
+  drop_github_auth
   for v in $(compgen -e); do
     ok=""
-    for p in "${pats[@]}"; do
-      # shellcheck disable=SC2254 # $p is a pattern on purpose
-      case "$v" in $p) ok=1 && break ;; esac
+    for p in PATH $keep_base $keep_proxy; do
+      # shellcheck disable=SC2254
+      case "$v" in $p) ok=1; break ;; esac
     done
-    [ -n "$ok" ] || unset "$v" 2>/dev/null || refuse "cannot clear $v"
+    [ -n "$ok" ] || unset "$v" || refuse "cannot clear $v"
   done
-  for v in $(compgen -A function); do unset -f "$v"; done
-  exec "$@"
 }
 
-# mise only from its install locations, never PATH: sets mise_bin.
+restore_release_env() {
+  local i
+  for i in "${!release_names[@]}"; do export "${release_names[i]}=${release_values[i]}"; done
+}
+
+check_release_file() {
+  # Tracked, as a regular executable file (mode 100755), and not a symbolic link: what runs is
+  # what the clean-tree check and the guarded diff cover (Codex C12).
+  [ -f "$root/$conf_release" ] && [ ! -L "$root/$conf_release" ] &&
+    [ "$(git -C "$root" ls-files -s -- "$conf_release" | awk '{print $1}')" = 100755 ] ||
+    die "harness.toml [gate]: release '$conf_release' is not a tracked regular executable file (git mode 100755)"
+}
+
 mise_bin=""
 find_fixed_mise() {
   local c
   for c in /opt/homebrew/bin/mise /usr/local/bin/mise "$HOME/.local/bin/mise"; do
     [ -x "$c" ] && mise_bin="$c" && return 0
   done
-  die "mise not found (/opt/homebrew/bin, /usr/local/bin, ~/.local/bin). Install mise and retry."
+  die "mise not found in its fixed install locations"
 }
 
-# Stage 1: mise only from its install locations (never PATH), a system PATH, the named variables.
-# The second stage is marked by an argument, not by the environment.
-release_stage1() {
-  find_fixed_mise
-  load_conf
-  [ "$1" = "$conf_verb" ] || die "this repository releases with ./dev $conf_verb, not ./dev $1"
-  export PATH=/usr/bin:/bin:/usr/sbin:/sbin
-  exec_clean "PATH $keep_base $keep_gate $conf_keep_env" "$mise_bin" exec --locked -- "$self" --stage2 "$@"
-}
-
-# The exported GIT_CONFIG_* entries, as sorted NAME=VALUE lines.
+# Canonical comparison of the wrapper’s environment. Values stay inside the process pipeline.
 git_config_env() {
   local v
   for v in $(compgen -e); do
@@ -168,22 +166,17 @@ git_auth_entries() {
   )
 }
 
-# Stage 2's git reaches GitHub only through the entries gh-token.sh sets: the names stage 2 keeps
-# (GIT_CONFIG_COUNT, _KEY_n, _VALUE_n) must carry exactly those keys and values, no more, no fewer
-# (finding K10). Another credential helper, URL rewrite or option would otherwise pass by name.
+# Validate every supplied Git configuration entry before Git reads the checkout.
 assert_git_auth() {
   local current expected
   expected="$(git_auth_entries)" || die "cannot read the git entries of $here/gh-token.sh"
   current="$(git_config_env)"
   [ "$current" = "$expected" ] ||
-    refuse "the GIT_CONFIG_* entries are not exactly the ones gh-token.sh sets: run it as $(basename "$here")/gh-token.sh claude --read-only -- ./dev $conf_verb"
+    refuse "the GIT_CONFIG_* entries are not exactly the ones gh-token.sh sets: run it as $(basename "$here")/gh-token.sh <bot> --read-only -- ./dev $conf_verb"
 }
 
-# The mise configuration that stage 2 runs under may add nothing: no variable (an [env] section,
-# its _.file or _.source) and no PATH entry (_.path) other than the tools' own directories. mise
-# reads it from the repository, every parent directory and the global configuration, after the
-# clean re-run, so a variable stage 2 keeps by name (GH_TOKEN, a proxy) could come from there
-# (finding K10).
+# Inspect configuration only after removing GitHub authority. This probe itself evaluates
+# mise configuration, including parent and global files. See the documented keep_env limit.
 assert_no_mise_env() {
   local added paths bins p
   find_fixed_mise
@@ -201,28 +194,11 @@ $paths
 EOF
 }
 
-# Stage 2 refuses any variable outside the named list: whatever the first stage dropped and came
-# back (a hand-typed --stage2, or an [env] section of a mise configuration, which mise exec
-# applies after the clean re-run, from parent directories and the global configuration too).
-assert_clean_env() {
-  local v p ok
-  set -f
-  for v in $(compgen -e); do
-    ok=""
-    for p in $keep_added $keep_base $keep_gate $conf_keep_env; do
-      # shellcheck disable=SC2254 # $p is a pattern on purpose
-      case "$v" in $p) ok=1 && break ;; esac
-    done
-    [ -n "$ok" ] || refuse "$v is set after the clean re-run (a hand-typed --stage2, or a mise [env] section)"
-  done
-  set +f
-}
-
 # --- The checks ---------------------------------------------------------------------------------
 
 # 1. Clean tree, and no ignored file that mise or the release would still load.
 gate_clean_tree() {
-  local listing flagged st ignored f g
+  local listing flagged st f g
   # assume-unchanged / skip-worktree entries hide local edits from git status. git's own failure
   # is a refusal, not an empty list (Codex C11).
   listing="$(git ls-files -v)" || refuse "git ls-files -v failed"
@@ -231,18 +207,17 @@ gate_clean_tree() {
   st="$(git -c core.fsmonitor=false -c core.untrackedCache=false status --porcelain --untracked-files=all)" ||
     refuse "git status failed"
   [ -z "$st" ] || refuse "working tree not clean (see git status)"
-  ignored="$(git ls-files --others --ignored --exclude-standard --directory)" || refuse "git ls-files failed"
   set -f
-  while IFS= read -r f; do
-    # mise reads local, environment and legacy files that could override the pinned tools.
-    case "$f" in mise* | .mise* | .tool-versions | .config/*) refuse "ignored file that mise would load: $f" ;; esac
-    for g in $conf_loaded; do
-      # shellcheck disable=SC2254 # $g is a pattern on purpose
-      case "$f" in $g) refuse "ignored file that the release would load: $f" ;; esac
+  git ls-files --others --ignored --exclude-standard -z | (
+    while IFS= read -r -d '' f; do
+      # mise reads local, environment and legacy files that could override the pinned tools.
+      case "$f" in mise* | .mise* | .tool-versions | .config/*) refuse "ignored file that mise would load: $f" ;; esac
+      for g in $conf_loaded; do
+        # shellcheck disable=SC2254 # $g is a pattern on purpose
+        case "$f" in $g) refuse "ignored file that the release would load: $f" ;; esac
+      done
     done
-  done <<EOF
-$ignored
-EOF
+  ) || refuse "ignored file check or git ls-files failed"
   set +f
   echo "gate: tree clean"
 }
@@ -251,10 +226,10 @@ EOF
 # stored GitHub login. Without it, refuse at once rather than let git ask for a password. The
 # gate only reads, so the token it is meant to get is the read-only one (--read-only).
 need_gh_token() {
-  [ -n "${GH_TOKEN:-}" ] && return 0
-  next_step="the same command under the read-only bot token: $(basename "$here")/gh-token.sh claude --read-only -- ./dev …"
+  [ -n "${gate_token:-}" ] && return 0
+  next_step="the same command under the read-only bot token: $(basename "$here")/gh-token.sh <bot> --read-only -- ./dev …"
   left_for_pa="nothing"
-  refuse "no GitHub token: run it as $(basename "$here")/gh-token.sh claude --read-only -- ./dev … (the gate only reads GitHub)"
+  refuse "no GitHub token: run it as $(basename "$here")/gh-token.sh <bot> --read-only -- ./dev … (the gate only reads GitHub)"
 }
 
 # Every network call of the gate (the fetch, each GitHub read) runs under a deadline: one that
@@ -263,36 +238,65 @@ need_gh_token() {
 # forever (Codex C23).
 gate_deadline=60
 with_deadline() {
-  local pid watcher rc=0
-  "$@" &
+  local pid watcher expired rc=0
+  expired=$(mktemp -d) || return 1
+  set -m
+  (set +m; "$@") &
   pid=$!
   (
-    trap 'kill "$s" 2>/dev/null; exit 0' TERM
-    sleep "$gate_deadline" &
-    s=$!
-    wait "$s" && { pkill -TERM -P "$pid" 2>/dev/null; kill -TERM "$pid" 2>/dev/null; }
+    set +m
+    sleep "$gate_deadline"
+    : >"$expired/timeout"
+    kill -TERM -- "-$pid" 2>/dev/null || :
+    sleep 1
+    kill -KILL -- "-$pid" 2>/dev/null || :
   ) </dev/null >/dev/null 2>&1 &
   watcher=$!
   wait "$pid" || rc=$?
-  kill -TERM "$watcher" 2>/dev/null || true
+  # A helper may still hold stdout after its leader exits.
+  kill -KILL -- "-$pid" 2>/dev/null || :
+  kill -KILL -- "-$watcher" 2>/dev/null || :
+  wait "$watcher" 2>/dev/null || :
+  set +m
+  if [ -f "$expired/timeout" ]; then rc=124; unlink "$expired/timeout"; fi
+  rmdir "$expired"
   return "$rc"
 }
 
 # A GitHub read: `gh api` under the deadline, following every page (Codex C10: one page of 100
 # could hide a failed run or a second PR). Arguments: the API path, then the --jq filter.
 gh_read() {
-  with_deadline gh api --paginate "$1" --jq "$2"
+  with_deadline github_api "$1" "$2"
 }
+
+github_api() (
+  cd /
+  GH_TOKEN="${gate_token:-}" gh api --paginate "$1" --jq "$2"
+)
+
+remote_main() (
+  cd /
+  # Ignore Git config from the caller and clone. Transport receives only the bot wrapper's
+  # helper and a canonical HTTPS URL. No checkout, fetch hooks or candidate code runs here.
+  export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
+  # shellcheck disable=SC1091
+  source "$here/gh-token.sh"
+  export_git_auth "$gate_token"
+  git ls-remote --exit-code "https://github.com/$1.git" refs/heads/main
+)
 
 # 2. HEAD is the tip of origin/main, and origin/main is main on GitHub.
 gate_tip() {
-  local sha tip api_tip
-  # Never prompt for a username or password: a token or nothing.
-  GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/usr/bin/false SSH_ASKPASS=/usr/bin/false \
-    with_deadline git -c credential.interactive=false fetch --quiet origin main </dev/null ||
-    refuse "cannot fetch origin main"
+  local sha tip api_tip origin remote
+  origin=$(git remote get-url origin) || refuse "cannot read origin"
+  case "$origin" in
+    "https://github.com/$conf_repo"|"https://github.com/$conf_repo.git"|"git@github.com:$conf_repo.git"|"git@github.com:$conf_repo")
+      remote=$(with_deadline remote_main "$conf_repo") || refuse "cannot read origin main" ;;
+    /*) remote=$(with_deadline git ls-remote --exit-code "$origin" refs/heads/main) || refuse "cannot fetch origin main" ;;
+    *) refuse "origin does not name $conf_repo on GitHub" ;;
+  esac
   sha="$(git rev-parse HEAD)" || refuse "no HEAD"
-  tip="$(git rev-parse refs/remotes/origin/main)" || refuse "no origin/main"
+  tip=${remote%%$'\t'*}
   [ "$sha" = "$tip" ] || refuse "HEAD ${sha:0:12} is not the tip of origin/main (${tip:0:12})"
   api_tip="$(gh_read "repos/$conf_repo/commits/main" .sha)" || refuse "cannot read main of $conf_repo from GitHub"
   [ "$api_tip" = "$sha" ] || refuse "origin/main ${sha:0:12} is not main of $conf_repo on GitHub (${api_tip:0:12})"
@@ -310,7 +314,7 @@ gate_ci() {
       refuse "cannot read the check runs of ${sha:0:12}"
   else
     runs="$(gh_read "repos/$conf_repo/actions/runs?head_sha=$sha&event=push&per_page=100" \
-      '.workflow_runs[] | [.path, "", .status, (.conclusion // "none")] | @tsv')" ||
+      ".workflow_runs[] | select(.head_branch == \"main\" and .event == \"push\" and .head_sha == \"$sha\") | [.path, \"\", .status, (.conclusion // \"none\")] | @tsv")" ||
       refuse "cannot read the workflow runs of ${sha:0:12}"
   fi
   [ -n "$runs" ] || refuse "no CI run on ${sha:0:12} (not on main, or CI has not started)"
@@ -374,8 +378,8 @@ read_last() {
 
 # One release or baseline change at a time per clone. `lock` is a symbolic link whose target is
 # the owner's PID: `ln -s` creates it and publishes the owner in one atomic step, so there is no
-# moment when a live lock has no owner to check (Codex review of #102). A lock whose process is
-# gone is taken over; one that is not a PID link is refused, never removed. Each run removes only
+# moment when a live lock has no owner to check (Codex review of #102). A missing owner requires
+# manual recovery after PA verifies all child and target-side operations have ended. Each run removes only
 # its own lock, on any exit.
 lock_held=""
 release_lock() {
@@ -390,23 +394,24 @@ take_lock() {
   mkdir -p "$record_dir"
   # ln -s into an existing directory would create the link inside it and succeed; the gate
   # never makes a directory there, so one is foreign.
-  if [ -d "$record_dir/lock" ] && [ ! -L "$record_dir/lock" ]; then
-    refuse "$record_dir/lock is not a lock of this gate; if no release is running, remove it: rm -rf '$record_dir/lock'"
+  if [ -d "$record_dir/lock" ]; then
+    refuse "$record_dir/lock is not a lock of this gate; inspect it using the manual release-lock recovery procedure"
   fi
   if ! ln -s "$$" "$record_dir/lock" 2>/dev/null; then
     pid="$(readlink "$record_dir/lock" 2>/dev/null || true)"
     [[ "$pid" =~ ^[0-9]+$ ]] ||
-      refuse "$record_dir/lock is not a lock of this gate; if no release is running, remove it: rm -rf '$record_dir/lock'"
+      refuse "$record_dir/lock is not a lock of this gate; inspect it using the manual release-lock recovery procedure"
     if kill -0 "$pid" 2>/dev/null; then
       refuse "another release of this clone is running (pid $pid); wait for it to end"
     fi
-    echo "gate: taking over a lock left by a process that is gone (pid $pid)"
-    # Remove it only if it is still that stale lock, then claim it the same atomic way.
-    if [ "$(readlink "$record_dir/lock" 2>/dev/null || true)" = "$pid" ]; then rm -f "$record_dir/lock"; fi
-    ln -s "$$" "$record_dir/lock" 2>/dev/null || refuse "another release of this clone started at the same moment"
+    refuse "stale release lock (pid $pid); verify release and target state before manual recovery (README, Release lock)"
   fi
   lock_held=1
   trap release_lock EXIT
+  # Bash defers a caught signal while waiting for the synchronous release child.
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
+  trap 'exit 129' HUP
 }
 
 # 5. Every change since the last release came through a PR merged by the merger (finding K21).
@@ -461,10 +466,11 @@ read_old_settings() {
   local parsed kind k v
   for k in $gate_keys; do printf -v "old_$k" '%s' ""; done
   old_settings=none
-  git cat-file -e "$last_released:harness.toml" 2>/dev/null || return 0
+  local entry
+  entry="$(git ls-tree "$last_released" -- harness.toml)" || refuse "cannot inspect historical tree"
+  [ -n "$entry" ] || return 0
   parsed="$(git show "$last_released:harness.toml" | awk -f "$here/conf.awk" 2>/dev/null)" || {
-    old_settings=unreadable
-    return 0
+    refuse "cannot read historical harness.toml; guarded paths are unknown"
   }
   while IFS="$(printf '\t')" read -r kind k v; do
     case "$kind $k" in
@@ -547,7 +553,9 @@ run_release() {
   shift
   drop_github_auth
   echo "== $conf_release ${sha:0:12} $*"
-  GATE_SHA="$sha" GATE_LAST="$last_released" GATE_RECORD_DIR="$record_dir" "$root/$conf_release" "$@" || rc=$?
+  local -a runner=()
+  if [ -n "$mise_bin" ]; then runner=("$mise_bin" exec --locked --); fi
+  GATE_SHA="$sha" GATE_LAST="$last_released" GATE_RECORD_DIR="$record_dir" ${runner[@]+"${runner[@]}"} "$root/$conf_release" "$@" || rc=$?
   case "$rc" in
     0)
       record "$sha" ok
@@ -570,19 +578,17 @@ run_release() {
 # The order is the point (finding K20): every check that needs no repository code runs first,
 # and the GitHub credential is dropped before anything of the repository runs (its `./dev check`
 # command, then the release command).
-release_stage2() {
-  load_conf
-  assert_clean_env
+release_verified() {
   [ "$1" = "$conf_verb" ] || die "this repository releases with ./dev $conf_verb, not ./dev $1"
   shift
-  assert_no_mise_env
   need_gh_token
-  assert_git_auth
   take_lock
   gate_all
   gate_since_last "$gate_sha"
   gate_guarded_diff "$gate_sha"
-  drop_github_auth
+  unset gate_token
+  restore_release_env
+  assert_no_mise_env
   "$here/dev" check </dev/null || die "./dev check failed on ${gate_sha:0:12}; nothing was released"
   run_release "$gate_sha" "$@"
 }
@@ -591,7 +597,6 @@ release_stage2() {
 # commit: CI and merged-by for that commit.
 check_main() {
   local sha
-  load_conf
   need_gh_token
   if [ "$#" -eq 0 ]; then
     gate_all
@@ -601,6 +606,8 @@ check_main() {
     sha="$(git rev-parse --verify --quiet "$1^{commit}")" || die "unknown commit: $1"
     gate_ci "$sha"
     gate_merged_by "$sha"
+    printf 'done: CI and PR merger verified for %s\nleft for PA: nothing\nnext: /dev-check-release-readiness for HEAD\n' "$sha"
+    return
   fi
   echo "gate: OK"
   printf 'done: the gate passes on %s (read-only; nothing was released)\nleft for PA: the release, in PA'"'"'s own terminal\nnext: ./dev %s\n' "$(git rev-parse --short=12 "${sha:-HEAD}")" "$conf_verb"
@@ -611,7 +618,6 @@ check_main() {
 # the terminal. Nothing else ever sets `last` except a release. No GitHub token is needed.
 set_baseline() {
   local sha
-  load_conf
   sha="$(git rev-parse --verify --quiet "$1^{commit}")" || die "unknown commit: $1 (fetch it first)"
   git merge-base --is-ancestor "$sha" refs/remotes/origin/main 2>/dev/null ||
     refuse "${sha:0:12} is not on origin/main: only a commit of main can have been released"
@@ -640,6 +646,11 @@ set_baseline() {
 
 main() {
   cd "$root"
+  case "${1:-}" in release|check|tree) ;; *) die "usage: ./dev gate [<sha>] | ./dev apply|deploy" ;; esac
+  if [ -n "${GH_TOKEN:-}" ] || [ -n "$(compgen -e GIT_CONFIG_)" ]; then assert_git_auth; fi
+  load_conf
+  prepare_entry
+  check_release_file
   case "${1:-}" in
     check)
       if [ "${2:-}" = --baseline ]; then
@@ -649,9 +660,8 @@ main() {
         shift && check_main "$@"
       fi
       ;;
-    tree) [ "$#" -eq 1 ] || die "usage: harness/gate tree" && load_conf && gate_clean_tree ;;
-    release) [ "$#" -ge 2 ] || die "usage: ./dev apply|deploy [args…]" && shift && release_stage1 "$@" ;;
-    --stage2) [ "$#" -ge 2 ] || die "usage: ./dev apply|deploy [args…]" && shift && release_stage2 "$@" ;;
+    tree) [ "$#" -eq 1 ] || die "usage: harness/gate tree" && gate_clean_tree ;;
+    release) [ "$#" -ge 2 ] || die "usage: ./dev apply|deploy [args…]" && shift && release_verified "$@" ;;
     *) die "usage: ./dev gate [<sha>] | ./dev gate --baseline <sha> | ./dev apply|deploy [args…] | harness/gate tree" ;;
   esac
 }

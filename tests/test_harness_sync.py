@@ -141,7 +141,7 @@ class HarnessSyncTest(unittest.TestCase):
 
         refused = self.run_sync("harness-v0.2", "--keep-root", "CLAUDE.md")
         self.assertNotEqual(refused.returncode, 0)
-        self.assertIn(".claude/settings.json: the core guard hook", refused.stderr)
+        self.assertIn(".claude/settings.json: verify the core guard hook", refused.stderr)
         self.assertFalse((self.tmp / "gh.log").exists())
 
         result = self.run_sync("--keep-root", "CLAUDE.md", "--keep-root", ".claude/settings.json")

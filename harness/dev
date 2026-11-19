@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash -p
 # dev: the core dispatcher. Every verb runs under `mise exec`, so tools come from the pinned
 # versions in mise.toml and never from the shell. Contract and rules: docs/harness-core.md.
 #
@@ -9,6 +9,15 @@
 # core); <root>/harness.toml names the profile, the tools to verify and the checks of `ci`.
 # Runs on macOS /bin/bash 3.2: no associative arrays, no mapfile.
 set -euo pipefail
+
+case "${1:-}" in
+  gate | apply | deploy)
+    export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+    core_dir="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
+    if [ "$1" = gate ]; then shift; exec "$core_dir/gate" check "$@"; fi
+    exec "$core_dir/gate" release "$@"
+    ;;
+esac
 
 self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 root="$(cd "$(dirname "$self")/.." && pwd)"
@@ -86,7 +95,9 @@ update_local_repo() {
   { [ -n "$main_wt" ] && cd "$main_wt"; } || die "cannot find the main checkout" "/dev-update-local-repo"
   [ "$(git symbolic-ref -q --short HEAD || true)" = main ] ||
     die "the main checkout $main_wt is not on main" "git -C $main_wt switch main, then /dev-update-local-repo"
-  [ -z "$(git status --porcelain)" ] ||
+  local working_changes
+  working_changes=$(git status --porcelain) || die "cannot read main worktree status" "/dev-update-local-repo"
+  [ -z "$working_changes" ] ||
     die "the main checkout $main_wt has uncommitted or untracked files" "commit them on a branch or remove them, then /dev-update-local-repo" "decide what to keep of the changes in $main_wt"
   git fetch --quiet origin || die "git fetch origin failed (line above)" "check the network and the remote, then /dev-update-local-repo"
   count="$(git rev-list --count origin/main..main)"
@@ -105,16 +116,22 @@ update_local_repo() {
   echo "update-local-repo: $changed"
   setup_out="$("$main_wt/$(basename "$(dirname "$self")")/dev" setup 2>&1)" || {
     printf '%s\n' "$setup_out" >&2
-    die "./dev setup failed after the pull (lines above); main stays at ${after:0:7}" "fix what it reports, then ./dev setup" "${left/#nothing/run ./dev setup once it is fixed}"
+    ending "$changed; setup failed; cleanup pending" "$left" "fix the setup error above, then /dev-update-local-repo" >&2
+    exit 1
   }
   echo "update-local-repo: ./dev setup passed"
   if [ -n "${GH_TOKEN:-}" ]; then
-    prune_out="$("$(dirname "$self")/git-prune-merged.sh" --all 2>&1)" || true
+    local prune_rc=0
+    prune_out="$("$(dirname "$self")/git-prune-merged.sh" --all 2>&1)" || prune_rc=$?
     printf '%s\n' "$prune_out" | grep -v -e '^done: ' -e '^left for PA: ' -e '^next: ' || true
     prune_done="$(printf '%s\n' "$prune_out" | sed -n 's/^done: //p')"
     case "$prune_out" in
       *"KEEP "*) if [ "$left" = nothing ]; then left="decide each KEEP line above"; else left="$left; decide each KEEP line above"; fi ;;
     esac
+    if [ "$prune_rc" -ne 0 ]; then
+      ending "$changed; setup passed; cleanup incomplete: ${prune_done:-see output above}" "$left" "/dev-delete-merged-branches --all"
+      exit "$prune_rc"
+    fi
     ending "$changed; setup passed; branches: ${prune_done:-not checked}" "$left" "/dev-status"
   else
     ending "$changed; setup passed; merged branches not checked (no bot token in GH_TOKEN)" "$left" "/dev-delete-merged-branches --all (it runs as your bot)"
@@ -125,12 +142,6 @@ if [ "${1:-}" = "update-local-repo" ]; then
   shift
   update_local_repo "$@"
 fi
-
-# The release verbs re-run themselves from a clean environment (harness/gate). They are handed
-# over before the ordinary re-run below, so nothing from the caller's PATH or mise is used first.
-case "${1:-}" in
-  apply | deploy) exec "$(dirname "$self")/gate" release "$@" ;;
-esac
 
 # Every other verb re-runs itself under mise exec. A caller-set DEV_UNDER_MISE only skips the
 # re-run; verify_tools below still refuses any tool that resolves outside mise.
@@ -201,7 +212,7 @@ verify_core() {
   [ -f .harness/CHECKSUMS ] || die ".harness/CHECKSUMS is missing" "/dev-harness-sync (re-sync the core)"
   local sum mode hash path f bad="" listed present
   if command -v sha256sum >/dev/null 2>&1; then sum="sha256sum"; else sum="shasum -a 256"; fi
-  while read -r mode hash path; do
+  while read -r mode hash path || [ -n "$mode$hash$path" ]; do
     [[ "$mode" =~ ^(644|755)$ && "$hash" =~ ^[0-9a-f]{64}$ && "$path" =~ ^[A-Za-z0-9._/-]+$ ]] ||
       die ".harness/CHECKSUMS has a malformed line (mode sha256 path expected)" "/dev-harness-sync (re-sync the core)"
     f=".harness/$path"
@@ -221,10 +232,14 @@ verify_core() {
 # The active git hooks must be the core's (finding K14): a clone that never ran `./dev setup`, or
 # whose hooks point elsewhere (an old checkout of another repository), is refused with the fix.
 verify_hooks() {
-  local active
+  local active hook
   active="$(git config --get core.hooksPath || true)"
   [ "$active" = "$hooks_path" ] ||
     die "git hooks are not the core's (core.hooksPath is '${active:-unset}', not '$hooks_path'): run ./dev setup in your own terminal" "./dev setup, in PA's own terminal" "run ./dev setup in your own terminal (the agent sandbox cannot write .git/config)"
+  for hook in pre-commit pre-push; do
+    [ ! -L "$hooks_path" ] && [ -f "$hooks_path/$hook" ] && [ ! -L "$hooks_path/$hook" ] && [ -x "$hooks_path/$hook" ] ||
+      die "inactive hook $hooks_path/$hook: restore the regular executable hook" "/dev-run-ci-locally"
+  done
 }
 
 # Printed by check and at the start of ci, so that every log carries the resolved versions.
@@ -282,6 +297,7 @@ case "$cmd" in
     [ "$#" -eq 1 ] || die "usage: ./dev ci" "./dev ci"
     verify_tools
     verify_core
+    verify_hooks
     print_tools
     core_checks
     if [ -n "$check_command" ]; then
@@ -298,12 +314,6 @@ $checks
 EOF
     echo "ci: OK"
     ending "./dev ci passed" "nothing" "push the branch as your bot: $(basename "$(dirname "$self")")/gh-token.sh <bot> -- git push origin HEAD:refs/heads/<branch>"
-    ;;
-  gate)
-    # Read-only checks of the release gate; no credential is read.
-    shift
-    verify_tools
-    exec "$(dirname "$self")/gate" check "$@"
     ;;
   x)
     shift

@@ -27,9 +27,6 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-# Every PreToolUse group in the file, wherever the agent's format nests it.
-groups='[.. | objects | select(has("PreToolUse")) | .PreToolUse | arrays | .[] | objects]'
-
 findings=""
 for file in .claude/settings.json .codex/hooks.json .agents/hooks.json; do
   binding="$here/bindings/$file"
@@ -38,6 +35,10 @@ for file in .claude/settings.json .codex/hooks.json .agents/hooks.json; do
 "
     continue
   }
+  case "$file" in
+    .agents/*) groups='[.[] | objects | select((has("enabled") | not) or .enabled == true) | .PreToolUse | arrays | .[]]' ;;
+    *) groups='.hooks.PreToolUse' ;;
+  esac
   matcher="$(jq -r "$groups | .[0].matcher" "$binding")"
   command="$(jq -r "$groups | .[0].hooks[0].command" "$binding")"
   from="/.harness/guard"
@@ -46,11 +47,15 @@ for file in .claude/settings.json .codex/hooks.json .agents/hooks.json; do
   if [ ! -f "$file" ]; then
     findings="$findings$file is missing: copy $base/bindings/$file there (the core guard hook)
 "
-  elif ! jq -e . "$file" >/dev/null 2>&1; then
+  elif ! jq -es 'length == 1 and (.[0] | type == "object")' "$file" >/dev/null 2>&1; then
     findings="$findings$file is not valid JSON: fix it, then merge the PreToolUse entry of $base/bindings/$file
 "
   elif ! jq -e --arg m "$matcher" --arg c "$command" \
-    "$groups | any(.matcher == \$m and ((.hooks // []) | arrays | any(.command == \$c)))" "$file" >/dev/null; then
+    "((has(\"disableAllHooks\") | not) or .disableAllHooks == false) and ($groups | arrays | any(.matcher == \$m and
+      (keys - [\"matcher\", \"hooks\"] == []) and ((.hooks // []) | arrays |
+      any((del(.timeout, .async, .statusMessage) == {type:\"command\", command:\$c})
+          and ((has(\"async\") | not) or .async == false)
+          and ((has(\"timeout\") | not) or (.timeout | type == \"number\" and . >= 10))))))" "$file" >/dev/null; then
     findings="$findings$file does not call the core guard: merge the PreToolUse entry of $base/bindings/$file into it (matcher '$matcher', command '$command')
 "
   fi

@@ -112,19 +112,20 @@ class SyncTest(unittest.TestCase):
         (self.consumer / ".claude").mkdir()
         (self.consumer / ".claude" / "settings.json").write_text('{"own": true}\n')
         (self.consumer / "dev").write_text("#!/bin/sh\necho own dev\n")
+        (self.consumer / "dev").chmod(0o755)
         git(self.consumer, "add", "-A")
         git(self.consumer, "commit", "-q", "-m", "own settings and dev")
         refused = self.sync()
         self.assertEqual(refused.returncode, 1)
-        self.assertIn(".claude/settings.json: the core guard hook for Claude Code would stay unwired", refused.stderr)
-        self.assertIn("dev: the core dispatcher", refused.stderr)
+        self.assertIn(".claude/settings.json: verify the core guard hook for Claude Code before keeping this file", refused.stderr)
+        self.assertIn("dev: verify the core dispatcher", refused.stderr)
         self.assertIn("--keep-root <file>", refused.stderr)
         self.assertEqual(git(self.consumer, "branch", "--list", "harness-sync/*").strip(), "", "nothing written")
         self.assertFalse((self.consumer / ".harness").exists())
         partly = self.sync("--keep-root", "dev")
         self.assertEqual(partly.returncode, 1)
         self.assertIn(".claude/settings.json", partly.stderr)
-        self.assertNotIn("dev: the core dispatcher", partly.stderr)
+        self.assertNotIn("dev: verify the core dispatcher", partly.stderr)
         self.assertIn("names no root file", self.sync("--keep-root", "settings.json").stderr)
 
     def test_root_files_are_installed_only_where_absent_and_never_overwritten(self):
@@ -135,7 +136,7 @@ class SyncTest(unittest.TestCase):
         result = self.sync("--keep-root", ".claude/settings.json")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.consumer / ".claude" / "settings.json").read_text(), '{"own": true}\n')
-        self.assertIn("`.claude/settings.json` DIFFERS from the core template; kept by --keep-root, so the core guard hook for Claude Code stays unwired", result.stdout)
+        self.assertIn("`.claude/settings.json` DIFFERS from the core template; kept by --keep-root. Verify the core guard hook for Claude Code in the retained file", result.stdout)
         self.assertTrue((self.consumer / "dev").is_file() and os.access(self.consumer / "dev", os.X_OK))
         self.assertTrue((self.consumer / ".codex" / "hooks.json").is_file())
         self.assertIn("`.claude/skills` is not the symlink", result.stdout)
@@ -200,6 +201,34 @@ class SyncTest(unittest.TestCase):
         self.assertIn("`AGENTS.md` written from `.harness/templates/AGENTS.md` (was absent)", result.stdout)
         self.assertIn("`AGENTS.md`: shared block replaced", result.stdout)
         self.assertNotIn("`CLAUDE.md` does not start with `@AGENTS.md`", result.stdout)
+
+    def test_root_mode_and_redirected_binding_parent_refused_before_branch(self):
+        dev = self.consumer / "dev"
+        dev.write_bytes((self.workshop / "harness/templates/dev").read_bytes())
+        dev.chmod(0o644)
+        git(self.consumer, "add", "dev")
+        git(self.consumer, "commit", "-qm", "nonexecutable shim")
+        result = self.sync("--keep-root", "dev")
+        self.assertIn("restore template mode 755", result.stderr)
+        self.assertFalse((self.consumer / ".harness").exists())
+        dev.chmod(0o755)
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        (self.consumer / ".codex").symlink_to(outside)
+        git(self.consumer, "add", "-A")
+        git(self.consumer, "commit", "-qm", "redirected root")
+        self.assertIn("restore a repository directory", self.sync().stderr)
+        self.assertEqual(list(outside.iterdir()), [])
+        self.assertEqual(git(self.consumer, "branch", "--show-current").strip(), "main")
+
+    def test_ci_mentions_are_reported_for_adoption(self):
+        workflow = self.consumer / ".github/workflows/ci.yml"
+        workflow.parent.mkdir(parents=True)
+        workflow.write_text("# TODO ./dev ci\njobs:\n  ci:\n    steps:\n"
+                            "      - name: ./dev ci\n        run: echo './dev ci'\n")
+        git(self.consumer, "add", "-A")
+        git(self.consumer, "commit", "-qm", "advisory only")
+        self.assertIn("No workflow under", self.sync().stdout)
 
     def test_ci_template_is_reported_never_written(self):
         """24g W6: a workflow file in the sync commit would make the bot's push fail."""
@@ -270,6 +299,23 @@ class SyncTest(unittest.TestCase):
         for name in ("mise.toml", "mise.lock"):
             shutil.copy2(ROOT / name, self.consumer / name)
         return clean_env(hooks=".harness/githooks", MISE_TRUSTED_CONFIG_PATHS=str(self.consumer))
+
+    def test_setup_and_final_checksum_without_newline(self):
+        self.synced_consumer_with_dispatcher()
+        env = clean_env(hooks=False, MISE_TRUSTED_CONFIG_PATHS=str(self.consumer))
+        self.assertEqual(run_dev(self.consumer, "setup", env=env).returncode, 0)
+        self.assertTrue(os.access(self.consumer / "dev", os.X_OK))
+        for name in ("pre-commit", "pre-push"):
+            actual = git(self.consumer, "rev-parse", "--git-path", "hooks/" + name).strip()
+            self.assertEqual((self.consumer / actual).resolve(), (self.consumer / ".harness/githooks" / name).resolve())
+            self.assertTrue(os.access(self.consumer / actual, os.X_OK))
+        sums = self.consumer / ".harness/CHECKSUMS"
+        sums.write_bytes(sums.read_bytes().rstrip(b"\n"))
+        self.assertEqual(run_dev(self.consumer, "check", env=env).returncode, 0)
+        last = sums.read_text().splitlines()[-1].split()[-1]
+        path = self.consumer / ".harness" / last
+        path.write_bytes(path.read_bytes() + b"x")
+        self.assertIn(f"{last} (content)", run_dev(self.consumer, "check", env=env).stderr)
 
     def test_check_passes_on_a_clean_core_and_detects_every_kind_of_drift(self):
         env = self.synced_consumer_with_dispatcher()

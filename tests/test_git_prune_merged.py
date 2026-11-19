@@ -120,6 +120,37 @@ class PruneTest(unittest.TestCase):
         self.assertTrue((self.wt("fix/e") / "notes.txt").exists())
         self.assertIn("uncommitted or untracked", self.out)
 
+    def test_ignored_marker_survives_preview_named_and_bulk_cleanup(self):
+        self.merged("feature", 5, self.new_branch("feature", worktree=True))
+        wt = self.wt("feature")
+        info = Path(self.git(wt, "rev-parse", "--git-common-dir"))
+        (wt / info / "info/exclude").write_text("local-note.txt\n")
+        marker = wt / "local-note.txt"
+        marker.write_text("kept\n")
+        for args in [("--dry-run", "feature"), ("feature",), ("--all",)]:
+            self.assertEqual(self.prune(*args), 1, self.out)
+            self.assertEqual(marker.read_text(), "kept\n")
+            self.assertTrue(self.has_branch("feature"))
+
+    def test_unreadable_status_preserves_branch_and_worktree(self):
+        self.merged("feature", 5, self.new_branch("feature", worktree=True))
+        stub = self.work / "bin/git"
+        stub.write_text('#!/bin/sh\ncase " $* " in *" status "*) exit 2 ;; esac\nexec /usr/bin/git "$@"\n')
+        stub.chmod(0o755)
+        self.assertEqual(self.prune("feature"), 1)
+        self.assertIn("cannot read worktree status", self.out)
+        self.assertTrue(self.wt("feature").is_dir())
+        self.assertTrue(self.has_branch("feature"))
+
+    def test_tip_change_during_pr_lookup_preserves_worktree(self):
+        self.merged("feature", 5, self.new_branch("feature", worktree=True))
+        stub = self.work / "bin/gh"
+        stub.write_text(stub.read_text() + '\ngit -C "$WT" commit --allow-empty -qm later\n')
+        self.assertEqual(self.prune("feature", WT=str(self.wt("feature"))), 1)
+        self.assertIn("tip changed", self.out)
+        self.assertTrue(self.wt("feature").is_dir())
+        self.assertTrue(self.has_branch("feature"))
+
     def test_f_dry_run_deletes_nothing(self):
         self.merged("fix/f", 106, self.new_branch("fix/f", worktree=True))
         self.assertEqual(self.prune("--dry-run", "fix/f"), 0)

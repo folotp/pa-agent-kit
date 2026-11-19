@@ -1,6 +1,6 @@
 # The harness core in this repository
 
-`.harness/` is the harness core, copied byte for byte from the workshop (`folotp/pa-agent-kit`, its `harness/` folder) at the tag named in `.harness/VERSION`. Never edit a file here: `./dev check` compares every file with `.harness/CHECKSUMS` and refuses any change. To update it, run `/dev-harness-sync` (it opens a sync PR as the bot); PA merges. The full contract is the workshop's `docs/harness-core.md` at that tag: `https://github.com/folotp/pa-agent-kit/blob/<tag>/docs/harness-core.md`.
+`.harness/` is the harness core, copied byte for byte from the workshop (`folotp/pa-agent-kit`, its `harness/` folder) at the tag named in `.harness/VERSION`. Never edit a file here: `./dev check` compares every file with `.harness/CHECKSUMS` and refuses any change. To update it, run `/dev-harness-sync` (it opens a sync PR as the bot); PA merges. Read the `commit` line in `.harness/VERSION`. In the workshop, run `git show <commit>:docs/harness-core.md` with that SHA to read the installed contract.
 
 `/dev-help` lists every command for PA and for agents. Each one ends with `done:`, `left for PA:` and `next:` lines.
 
@@ -46,3 +46,14 @@ A cloud session has no mise: `./dev` stops with `mise not found` and installs no
 ## Harness review
 
 The twice-yearly harness review (probes of the agents, pins, specs) runs in the workshop, not here. Report a workaround or a broken pointer to PA, who carries it there.
+
+
+## Release lock
+
+If a release lock survives a stopped process, suspend new releases and baseline changes in every worktree of the clone. Inspect the owner PID, the foreground release and any target-side job. Wait for each to finish. Verify the target SHA against the release record. With the clone quiescent, remove only the inspected stale PID symlink. If the target and record disagree, use the terminal baseline procedure with the verified target SHA before retrying. An unfamiliar lock object requires investigation.
+
+## Runtime and adoption checks
+
+Workflow inspection requires Ruby with its bundled Psych parser. The pin check reads block and flow YAML and rejects ambiguous declarations with a repair message. The CI advisory recognizes an unconditional standalone `./dev ci` run step using the default shell and directory. Review other arrangements manually. The Dependabot check requires workflow-root coverage as well as coverage for each local action using a remote action.
+
+Setup checks the active hook directory and both regular executable Git hooks. It also checks the on-disk registration of each synchronous command hook. Client trust, restart and runtime activation are verified in the adopting client. The gate uses system Git and a trusted installation of `gh` in a system or Homebrew bin directory before invoking mise. The normal wrapper requests a one-repository read-only token. The gate cannot establish the permissions of an arbitrary credential supplied by a caller.

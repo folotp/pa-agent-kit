@@ -56,6 +56,7 @@ class FixtureRepo:
         shutil.copy2(ROOT / "dev", self.dir / "dev")
         for name in ("dev", "conf.awk", "gate", "check-pins", "check-dependabot", "check-bindings", "skill-links"):
             shutil.copy2(ROOT / "harness" / name, self.dir / "harness" / name)
+        shutil.copytree(ROOT / "harness" / "githooks", self.dir / "harness" / "githooks")
         # The guard bindings, so that the binding check (24g F5) passes as in the workshop.
         shutil.copytree(ROOT / "harness" / "bindings", self.dir / "harness" / "bindings")
         for name in (".claude/settings.json", ".codex/hooks.json", ".agents/hooks.json"):
@@ -334,7 +335,6 @@ class HooksTest(unittest.TestCase):
 
     def setUp(self):
         source = FixtureRepo(self, 'profile = "plugin"\ntools = ["python3"]\ncheck = "echo CHECK-RAN"\n')
-        shutil.copytree(ROOT / "harness" / "githooks", source.dir / "harness" / "githooks")
         own = source.dir / ".githooks" / "pre-push"
         own.parent.mkdir()
         own.write_text('#!/bin/sh\ncat >"$(git rev-parse --show-toplevel)/../own-hook.out"\n')
@@ -373,6 +373,15 @@ class HooksTest(unittest.TestCase):
         self.assertEqual(push.returncode, 0, push.stderr)
         self.assertIn("refs/heads/feature", (self.dir / "own-hook.out").read_text())
 
+    def test_setup_refuses_inactive_git_hooks(self):
+        for name in ("pre-push", "pre-commit"):
+            hook = self.clone / "harness/githooks" / name
+            hook.chmod(0o644)
+            result = run_dev(self.clone, "setup", env=self.env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("inactive hook", result.stderr)
+            hook.chmod(0o755)
+
     def test_check_refuses_hooks_pointing_elsewhere(self):
         self.git(self.clone, "config", "core.hooksPath", "/elsewhere/hooks")
         result = run_dev(self.clone, "check", env=self.env)
@@ -393,7 +402,6 @@ class UpdateLocalRepoTest(unittest.TestCase):
 
     def setUp(self):
         source = FixtureRepo(self, 'profile = "plugin"\ntools = ["python3"]\n')
-        shutil.copytree(ROOT / "harness" / "githooks", source.dir / "harness" / "githooks")
         # A stand-in for the prune script: the wiring is tested here, the script in its own file.
         stub = source.dir / "harness" / "git-prune-merged.sh"
         stub.write_text('#!/bin/sh\necho "prune-stub $*"\necho "done: pruned 1: feat/x"\necho "left for PA: nothing"\necho "next: /dev-status"\n')
@@ -422,6 +430,38 @@ class UpdateLocalRepoTest(unittest.TestCase):
 
     def update(self, **extra):
         return run_dev(self.clone, "update-local-repo", env={**self.env, **extra})
+
+    def test_update_preserves_ignored_marker_and_reports_incomplete_prune(self):
+        # Local bare origin stands in for GitHub even though prune sees a GitHub URL.
+        url = "https://github.com/example/fixture.git"
+        self.git(self.clone, "remote", "set-url", "origin", url)
+        self.git(self.clone, "config", f"url.{self.dir / 'origin.git'}.insteadOf", url)
+        # git remote get-url expands rewrites; only the stub's diagnostic URL uses the GitHub form.
+        bin_dir = self.dir / "bin"
+        bin_dir.mkdir()
+        shim = bin_dir / "git"
+        shim.write_text(f'#!/bin/sh\nif [ "$*" = "remote get-url origin" ]; then echo {url}; exit; fi\nexec /usr/bin/git "$@"\n')
+        shim.chmod(0o755)
+        gh = bin_dir / "gh"
+        gh.write_text('#!/bin/sh\nprintf "7 %s\\n" "$MERGED_TIP"\n')
+        gh.chmod(0o755)
+        script = self.clone / "harness/git-prune-merged.sh"
+        shutil.copy2(ROOT / "harness/git-prune-merged.sh", script)
+        self.git(self.clone, "add", str(script))
+        self.git(self.clone, "commit", "-qm", "use actual prune")
+        # Publish only into the disposable bare fixture, making its main the update source.
+        self.git(self.dir / "origin.git", "fetch", str(self.clone), "main:main")
+        wt = self.dir / "feature"
+        self.git(self.clone, "worktree", "add", "-qb", "feature", str(wt))
+        (self.clone / ".git/info/exclude").write_text("local-note.txt\n")
+        marker = wt / "local-note.txt"
+        marker.write_text("kept\n")
+        result = self.update(PATH=str(bin_dir) + ":" + self.env["PATH"], GH_TOKEN="fixture",
+                             MERGED_TIP=self.git(self.clone, "rev-parse", "feature").stdout.strip())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("setup passed; cleanup incomplete", result.stdout)
+        self.assertEqual(marker.read_text(), "kept\n")
+        self.assertEqual(self.git(self.clone, "rev-parse", "--verify", "feature").returncode, 0)
 
     def test_fast_forward_setup_and_idempotence(self):
         self.upstream_commit()

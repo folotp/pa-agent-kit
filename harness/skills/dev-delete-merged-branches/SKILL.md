@@ -7,7 +7,7 @@ metadata:
 
 # Delete merged branches
 
-Every repository squash-merges, so git never sees a merged branch as merged and only a forced delete removes it. The guard refuses a forced delete from agents because it cannot tell merged work from unmerged work. The prune script is the narrow way through: it deletes a branch (and its worktree) only when GitHub shows a merged pull request whose last commit is exactly the local tip, and the worktree has nothing uncommitted or untracked. It never deletes `main`, `master` or a name in `harness.toml`'s `protected_branches`, and never touches the branch on GitHub.
+Every repository squash-merges, so git never sees a merged branch as merged and only a forced delete removes it. The guard refuses a forced delete from agents because it cannot tell merged work from unmerged work. The prune script is the narrow way through: it deletes a branch (and its worktree) only when GitHub shows a merged pull request whose last commit is exactly the local tip, and the worktree has nothing uncommitted, untracked or ignored and Git can read its status. It never deletes `main`, `master` or a name in `harness.toml`'s `protected_branches`, and never touches the branch on GitHub.
 
 `<core>` is `.harness` in a repository that syncs the core and `harness` in the workshop (`pa-agent-kit`); run from the repository root. `<bot>` is your own GitHub App: `claude` in Claude Code, `codex` in Codex, `antigravity` in Antigravity.
 

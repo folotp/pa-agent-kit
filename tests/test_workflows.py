@@ -239,6 +239,9 @@ class PinnedActionsTest(unittest.TestCase):
         self.assertEqual(self.unpinned(f"      - uses: 'actions/checkout@{SHA}'\n"), [])
         self.assertEqual(self.unpinned('      - uses: "actions/checkout@v4"\n'), ["actions/checkout@v4"])
 
+    def test_flow_and_quoted_keys_are_checked(self):
+        self.assertEqual(self.unpinned('jobs: {ci: {steps: [{"uses": org/action@main}]}}\n'), ["org/action@main"])
+
     def test_a_reusable_workflow_at_job_level_is_judged(self):
         text = (
             "jobs:\n"
