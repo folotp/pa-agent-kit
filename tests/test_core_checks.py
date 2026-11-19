@@ -4,6 +4,7 @@ Each check runs from a disposable repository directory, as `./dev check` runs it
 repository root. The pin check (D1) is tested in tests/test_workflows.py (`PinnedActionsTest`).
 """
 
+import json
 import re
 import shutil
 import subprocess
@@ -138,6 +139,87 @@ class DependabotCheckTest(unittest.TestCase):
         code, lines = self.check("version: 2\nupdates:\n" + entry(cooldown=""), {"a/action.yml": REMOTE_ACTION, "b/action.yml": REMOTE_ACTION})
         self.assertEqual(code, 1)
         self.assertEqual([bool(re.search(p, l)) for p, l in zip(("no cooldown", "actions/a/", "actions/b/"), lines)], [True] * 3, lines)
+
+
+class BindingCheckTest(unittest.TestCase):
+    """harness/check-bindings (24g F5): each agent's hook file calls the core guard, in the
+    consumer layout (`.harness/guard`) and in the workshop (`harness/guard`)."""
+
+    FILES = (".claude/settings.json", ".codex/hooks.json", ".agents/hooks.json")
+
+    def consumer(self):
+        """A synced consumer's layout: the check and the bindings under .harness/, no hook file yet."""
+        root = Path(tempfile.mkdtemp(prefix="core-bindings."))
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / ".harness").mkdir()
+        shutil.copy2(HARNESS / "check-bindings", root / ".harness" / "check-bindings")
+        shutil.copytree(HARNESS / "bindings", root / ".harness" / "bindings")
+        return root
+
+    def place(self, root, name, text=None):
+        target = root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text if text is not None else (HARNESS / "bindings" / name).read_text())
+
+    def run_in(self, root):
+        result = subprocess.run([str(root / ".harness" / "check-bindings")], cwd=root, capture_output=True, text=True, timeout=30)
+        return result.returncode, result.stdout.splitlines()
+
+    def test_the_workshop_files_pass(self):
+        self.assertEqual(run_check("check-bindings", ROOT), (0, []))
+
+    def test_the_core_bindings_pass_in_a_consumer(self):
+        root = self.consumer()
+        for name in self.FILES:
+            self.place(root, name)
+        self.assertEqual(self.run_in(root), (0, []))
+
+    def test_a_missing_file_names_the_binding_to_copy(self):
+        root = self.consumer()
+        for name in self.FILES[1:]:
+            self.place(root, name)
+        self.assertEqual(self.run_in(root), (1, [".claude/settings.json is missing: copy .harness/bindings/.claude/settings.json there (the core guard hook)"]))
+
+    def test_an_own_settings_file_without_the_guard_fails_with_the_entry_to_merge(self):
+        """The live repositories' case: their own .claude/settings.json, kept by the sync."""
+        root = self.consumer()
+        for name in self.FILES[1:]:
+            self.place(root, name)
+        own = {"permissions": {"deny": ["Read(.env)"]}, "hooks": {"PreToolUse": [
+            {"matcher": "Bash", "hooks": [{"type": "command", "command": "own-hook.sh"}]}]}}
+        self.place(root, ".claude/settings.json", json.dumps(own))
+        code, lines = self.run_in(root)
+        self.assertEqual(code, 1)
+        self.assertEqual(lines, [".claude/settings.json does not call the core guard: merge the PreToolUse entry of "
+                                 ".harness/bindings/.claude/settings.json into it (matcher 'Bash', command "
+                                 "'\"$CLAUDE_PROJECT_DIR/.harness/guard\" claude')"])
+        # Merged next to the repository's own hook: passes.
+        own["hooks"]["PreToolUse"][0]["hooks"].append({"type": "command", "command": "\"$CLAUDE_PROJECT_DIR/.harness/guard\" claude"})
+        self.place(root, ".claude/settings.json", json.dumps(own))
+        self.assertEqual(self.run_in(root), (0, []))
+
+    def test_the_guard_must_be_a_pre_tool_use_hook_with_the_bindings_matcher(self):
+        root = self.consumer()
+        for name in self.FILES[:2]:
+            self.place(root, name)
+        command = "\"$(git rev-parse --show-toplevel)/.harness/guard\" antigravity"
+        for wrong in (
+            {"x": {"PostToolUse": [{"matcher": "run_command", "hooks": [{"command": command}]}]}},
+            {"x": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"command": command}]}]}},
+            {"x": {"PreToolUse": [{"matcher": "run_command", "hooks": [{"command": command.replace(".harness/", "harness/")}]}]}},
+        ):
+            with self.subTest(wrong):
+                self.place(root, ".agents/hooks.json", json.dumps(wrong))
+                code, lines = self.run_in(root)
+                self.assertEqual(code, 1)
+                self.assertTrue(lines[0].startswith(".agents/hooks.json does not call the core guard"), lines)
+        self.place(root, ".agents/hooks.json", "{not json")
+        self.assertEqual(self.run_in(root), (1, [".agents/hooks.json is not valid JSON: fix it, then merge the PreToolUse entry of .harness/bindings/.agents/hooks.json"]))
+
+    def test_every_finding_is_reported_in_one_run(self):
+        code, lines = self.run_in(self.consumer())
+        self.assertEqual(code, 1)
+        self.assertEqual([line.split(" ", 1)[0] for line in lines], list(self.FILES))
 
 
 if __name__ == "__main__":

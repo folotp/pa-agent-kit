@@ -146,6 +146,27 @@ class SyncTest(unittest.TestCase):
                 self.assertEqual(sorted(p.name for p in own.parent.iterdir()), [name])
                 self.assertIn(f"`.github/{name}` kept as it is (the repository's own; `./dev check` judges", result.stdout)
 
+    def test_agents_md_is_written_when_absent_with_the_shared_block_filled(self):
+        """24g F1: without AGENTS.md no shared-block line reaches Codex or Antigravity."""
+        result = self.sync()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = (self.consumer / "AGENTS.md").read_text()
+        block = (ROOT / "harness" / "templates" / "AGENTS.shared.md").read_text().strip("\n")
+        self.assertIn(block, text)
+        self.assertTrue(text.startswith("# Agent instructions\n"))
+        self.assertIn("`AGENTS.md` written from `.harness/templates/AGENTS.md` (was absent)", result.stdout)
+        self.assertIn("`AGENTS.md`: shared block replaced", result.stdout)
+        self.assertNotIn("`CLAUDE.md` does not start with `@AGENTS.md`", result.stdout)
+
+    def test_a_claude_md_that_does_not_import_agents_md_is_reported(self):
+        (self.consumer / "CLAUDE.md").write_text("# Own rules\n")
+        git(self.consumer, "add", "-A")
+        git(self.consumer, "commit", "-q", "-m", "own claude")
+        result = self.sync("--keep-root", "CLAUDE.md")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.consumer / "CLAUDE.md").read_text(), "# Own rules\n")
+        self.assertIn("`CLAUDE.md` does not start with `@AGENTS.md`: Claude Code does not read `AGENTS.md`", result.stdout)
+
     def test_shared_block_is_replaced_between_markers_only(self):
         begin, end = "<!-- harness:shared:begin -->", "<!-- harness:shared:end -->"
         (self.consumer / "AGENTS.md").write_text(f"top\n{begin}\nold\n{end}\nown rules\n")

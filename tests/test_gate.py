@@ -743,9 +743,14 @@ class ReleaseFixture:
         git(self.dir, "clone", "-q", str(self.origin), str(self.work))
         git(self.work, "checkout", "-q", "-b", "main")
         (self.work / "harness").mkdir()
-        for name in ("gate", "conf.awk", "dev", "gh-token.sh"):
+        for name in ("gate", "conf.awk", "dev", "gh-token.sh", "check-pins", "check-dependabot", "check-bindings"):
             shutil.copy2(ROOT / "harness" / name, self.work / "harness" / name)
         shutil.copytree(ROOT / "harness" / "githooks", self.work / "harness" / "githooks")
+        # The guard bindings, as in the workshop, so that `./dev check`'s binding check (24g F5) passes.
+        shutil.copytree(ROOT / "harness" / "bindings", self.work / "harness" / "bindings")
+        for name in (".claude/settings.json", ".codex/hooks.json", ".agents/hooks.json"):
+            (self.work / name).parent.mkdir(exist_ok=True)
+            shutil.copy2(ROOT / name, self.work / name)
         shutil.copy2(ROOT / "dev", self.work / "dev")
         git(self.work, "config", "core.hooksPath", "harness/githooks")  # as `./dev setup` leaves it
         files = {

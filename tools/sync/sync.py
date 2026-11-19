@@ -16,7 +16,10 @@ What it writes in the target, on a new branch `harness-sync/<rev>`, in one commi
      but one that differs leaves part of the core unwired, so sync refuses (exit 1, nothing
      written) unless `--keep-root <file>` names it; a kept file is reported with what stays unwired.
   2b. Starting points (STARTERS), written only where the target has none and never compared after:
-     `.github/dependabot.yml` from `templates/dependabot.yml`. An existing one is kept and reported.
+     `AGENTS.md` from `templates/AGENTS.md` (a heading and an empty marked block, filled in step 3)
+     and `.github/dependabot.yml` from `templates/dependabot.yml`. An existing one is kept and
+     reported. A `CLAUDE.md` whose first line is not `@AGENTS.md` is reported: Claude Code would
+     not read the shared block.
   3. The shared block of `AGENTS.md` (between `harness:shared:begin` and `harness:shared:end`):
      replaced when both markers are present, otherwise reported.
   4. The `.claude/skills` symlink is only checked and reported.
@@ -132,6 +135,12 @@ def differing_roots(target, files):
 # so an existing one is never compared with the template and never refused (24g D2, F1).
 # {destination: (core template, other names that count as present, note when written, note when kept)}
 STARTERS = {
+    # Written before the shared block step below, which fills its empty marked block.
+    "AGENTS.md": (
+        "templates/AGENTS.md", (),
+        "its shared block is filled below; write the section 'This repository'",
+        "the repository's own; only its marked shared block is replaced",
+    ),
     ".github/dependabot.yml": (
         "templates/dependabot.yml", (".github/dependabot.yaml",),
         "review its schedule and add the repository's other ecosystems below its entry",
@@ -202,6 +211,10 @@ def install(target, rev, commit, files, kept=()):
             report.append("- `AGENTS.md`: shared block replaced")
         else:
             report.append("- `AGENTS.md`: shared block already current")
+    claude = target / "CLAUDE.md"
+    if claude.exists() and claude.read_text(encoding="utf-8").split("\n", 1)[0].strip() != "@AGENTS.md":
+        report.append("- `CLAUDE.md` does not start with `@AGENTS.md`: Claude Code does not read `AGENTS.md` (and its "
+                      "shared block) while `CLAUDE.md` exists; make `@AGENTS.md` its first line (as `.harness/templates/CLAUDE.md`)")
 
     link = target / ".claude" / "skills"
     if not (link.is_symlink() and os.readlink(link) == "../.agents/skills"):
