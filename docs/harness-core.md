@@ -328,7 +328,7 @@ Delivery, checked by hand on 2026-11-17 (session 20) with `git push --dry-run or
 
 ## Token script
 
-`harness/gh-token.sh` mints a one-hour GitHub App installation token for one repository, runs one command as `<app>[bot]` and revokes the token; `pa -- <command>` releases PA's own token through a Keychain prompt for one command. It moved from `ha-config/scripts/` in session 20 with no change in behaviour: only two mentions of its documentation's path differ (checked by `diff`, and by a `--info` read-back from the new place). Setup, rights and failure behaviour: `harness/gh-token.md`. Until a live repository syncs the core, its own copy stays and either copy serves any repository. The gate's 'no GitHub token' refusal names it.
+`harness/gh-token.sh` mints a one-hour GitHub App installation token for one repository, runs one command as `<app>[bot]` and revokes the token; `owner -- <command>` releases PA's own token through a Keychain prompt for one command. It moved from `ha-config/scripts/` in session 20 with no change in behaviour: only two mentions of its documentation's path differ (checked by `diff`, and by a `--info` read-back from the new place). Setup, rights and failure behaviour: `harness/gh-token.md`. Until a live repository syncs the core, its own copy stays and either copy serves any repository. The gate's 'no GitHub token' refusal names it.
 
 Session 24c changed it (finding K24, PA's yes to the interface change):
 
@@ -336,7 +336,9 @@ Session 24c changed it (finding K24, PA's yes to the interface change):
 - Printing a token needs `--print`; `gh-token.sh <app>` alone prints the usage and exits 2. A printed token is the caller's and is never revoked by the script.
 - In `--info` and `-- CMD` modes an exit trap, set right after the token is minted, revokes it on any exit: the end of the command, an error of the script, Ctrl-C or `TERM`. The command's exit status is kept.
 - Every API request times out after 30 seconds.
-- Owner mode (`pa -- CMD`) exports PA's token to the command and everything it starts, for as long as they run; nothing narrows or revokes it, so the command must be one named operation, never a shell or a tool that runs other code (`harness/gh-token.md`).
+- Owner mode exports PA's token to the command and everything it starts, for as long as they run; nothing narrows or revokes it, so the command must be one named operation, never a shell or a tool that runs other code (`harness/gh-token.md`).
+
+Session 24h renamed the owner mode (24g row C6, PA's decision; the interface freezes at the first core tag): the argument is `owner` (`gh-token.sh owner -- CMD`), and `pa` is refused with one line naming `owner` (no alias). The Keychain item is `github-owner-token` (was `github-pa-token`); PA re-creates it once with the command `harness/gh-token.md` gives ('Owner token'). The script first reads the item's attributes, which shows no dialog and returns no secret, so a missing item (it prints the one-time `security add-generic-password` command) is told apart from a denied dialog (nothing ran; re-run and click Allow); both end with `done:`, `left for PA:` and `next:` lines. `tests/test_gh_token.py` covers both, the refusal of `pa` and a released token reaching the command.
 
 `ha-config`'s copy (`scripts/gh-token.sh`) keeps the old interface until session 27 replaces it with the core's.
 
