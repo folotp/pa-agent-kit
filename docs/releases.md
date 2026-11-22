@@ -2,23 +2,17 @@
 
 ## How a release happens
 
-Merging a version bump is the release, in two steps: the merge, then PA's tag. Only PA can create a `*/v*` tag (session 25): a tag ruleset on `*/v*`, `harness-v*` and `stable` restricts creating, moving and deleting them, with the repository admin role as the only bypass. GitHub refuses the GitHub Actions App as a bypass actor on a personal repository, so the workflow cannot tag; it drafts the release of a tag PA pushes.
+Use /dev-help to find the workshop release command. Run `/dev-plugin-release <plugin>` in Claude Code or invoke the same skill by name in Codex or Antigravity. Run it again after each checkpoint.
 
-1. Bump the plugin's `version` in its `plugin.json` (`/bump-plugin <name> <version>` also updates the README table) and merge the PR (code-owner review: PA approves).
-2. PA tags the bump commit with PA's own token, by running [`scripts/tag-release.py`](../scripts/tag-release.py) through the token wrapper (an agent may run it too; PA clicks Allow on the Keychain dialog for `github-owner-token`; `/dev-run-with-owner-token` holds this recipe):
+1. Start a new bump with `/dev-plugin-release <plugin> patch` (or `minor` or `major`). The command plans the manifest and README bump. After explicit approval it opens a draft PR as the bot. PA reviews, marks it ready and merges it when checks pass. Use `/dev-status` to find the PR.
+2. After the merge, `/dev-plugin-release <plugin>` dry-runs the tag plan against `origin/main`. It prints the exact invocation of [the tag script](../scripts/tag-release.py), pinned to the full bump commit SHA. After giving explicit go, PA runs that line in their terminal and chooses **Allow** once in the Keychain dialog for `github-owner-token`. The repository tag ruleset restricts creation of `*/v*`, `harness-v*` and `stable` tags.
+3. The pushed tag starts the [release workflow](../.github/workflows/release.yml). It opens a draft, builds the plugin archive and one zip per skill from the tagged commit using [the packaging script](../scripts/plugin_zip.py), and attaches them.
+4. `/dev-plugin-release <plugin>` checks for all expected uploaded assets and prints the publish command. After separate explicit approval, PA runs it in their terminal and chooses **Allow** once for `github-owner-token`. The command names the release by ID and includes `tag_name` explicitly, using `gh api -X PATCH repos/{owner}/{repo}/releases/<id> -f tag_name=<tag> -F draft=false`. Every draft edit supplies `tag_name` so GitHub keeps it associated with the correct tag.
+5. `/dev-plugin-release <plugin>` confirms the release is published and immutable. Refresh with `/plugin marketplace update pa-marketplace` and then `/reload-plugins` in Claude Code, or run `codex plugin marketplace upgrade` in Codex.
 
-   ```text
-   harness/gh-token.sh owner -- python3 scripts/tag-release.py <plugin> --dry-run
-   harness/gh-token.sh owner -- python3 scripts/tag-release.py <plugin>
-   ```
+Draft read-back uses the bot's normal token and the releases list or release ID. The `--read-only` token cannot see drafts. Use the release ID or list for drafts because the tag lookup endpoints, including `gh release view <tag>`, can omit them. [GitHub REST release endpoints](https://docs.github.com/en/rest/releases/releases#list-releases).
 
-   The script fetches, reads the plugin's version at `origin/main`, finds the commit that bumped it (the latest commit on `main` touching `plugins/<plugin>/`; it refuses when that commit did not change the version), refuses a tag that exists locally or on the remote, and pushes `<plugin>/v<version>` on that commit. It tags the bump commit, not the tip of `main`, so another plugin's merge in between does not move the tag. Without the wrapper the push is refused by the tag ruleset. By hand, the same thing is `git fetch origin && git tag <plugin>/v<version> <bump commit> && git push origin refs/tags/<plugin>/v<version>`.
-
-   `python3 scripts/release-plugins.py --base <commit before the merge>` lists the tags a change calls for.
-3. The push runs [`release.yml`](../.github/workflows/release.yml), job `release`. It opens a **draft** release on the tag, builds the plugin's `<name>-v<version>.plugin` zip and one `<skill>.zip` per skill from the tagged commit ([`scripts/plugin_zip.py`](../scripts/plugin_zip.py)) and uploads them. Check the assets (`gh release view <tag>`, `unzip -l`).
-4. Publish: `gh release edit <plugin>/v<version> --draft=false`. With release immutability on, a published release and its tag can no longer change, which is why assets come first.
-
-To preview what a merge calls for, start the workflow by hand from `main`: `gh workflow run release.yml --ref main -f base=<commit before the change>` (job `preview`: it prints the tags to push and creates nothing). To preview a branch, run the script locally: `python3 scripts/release-plugins.py --base <commit> --head <branch>`. To check a tag before pushing it: `python3 scripts/release-plugins.py --tag <plugin>/v<version> --head <commit> --dry-run`.
+For a local preview, run `python3 scripts/release-plugins.py --base <commit> --head <branch>` to list tags, or `python3 scripts/release-plugins.py --tag <plugin>/v<version> --head <commit> --dry-run` to check a tag. The workflow's manual Preview job is available under Actions. For the owner-token procedure use `/dev-run-with-owner-token`.
 
 The `release` job is the only one with a write token, and it refuses before its script runs (session 24b, K8, and the Codex second read, C1; reshaped in session 25):
 
@@ -26,7 +20,7 @@ The `release` job is the only one with a write token, and it refuses before its 
 - the tagged commit must be on `origin/main`: the job runs the checked-out `release-plugins.py` with a contents-write token, so a tag on an unmerged commit would run unreviewed code with it;
 - the script refuses a tag that is not `<plugin>/v<version>`, whose plugin is not in the marketplace manifest, or whose version differs from the plugin's `plugin.json` at the tagged commit, and a tag whose release is already published.
 
-Agents create releases as drafts only: the guard denies `gh release create` without `--draft`, `--draft=false` and a `gh api` release write without `draft=true` (`docs/harness-core.md`, 'Guard'). Tagging and publishing (steps 2 and 4) are PA's.
+Agents create releases as drafts only: the guard denies `gh release create` without `--draft`, `--draft=false` and a `gh api` release write without `draft=true` (`docs/harness-core.md`, 'Guard'). For steps 2 and 4 use `/dev-plugin-release`.
 
 ### The `.plugin` zips
 
@@ -40,7 +34,7 @@ Build locally, any plugin and revision: `python3 scripts/plugin_zip.py --ref HEA
 
 Installs follow the default branch unless you pin them. `stable` is a moving tag that PA points at a commit PA has checked; installs that use it change only when the tag moves.
 
-Create or move the tag (it has no release, so it is not immutable). PA runs this, in PA's own terminal: the guard denies the force push to an agent, and the tag ruleset of session 25 refuses it to the bots:
+Create or move the tag (it has no release, so it is not immutable). Use `/dev-run-with-owner-token` to prepare the owner-token step. PA runs this in their terminal: the guard denies the force push to an agent, and the tag ruleset of session 25 refuses it to the bots:
 
 ```text
 git tag -f stable <commit> && git push -f origin refs/tags/stable

@@ -110,6 +110,19 @@ specs = "python3 -B tools/specs/specs.py"
 
 `check` must contact nothing: it is what local hooks, PR runs and `main` runs share, so one commit gives one result everywhere. A verb name may not be one of the built-in verbs. Values are single-line strings or arrays of strings and may not contain double quotes or backslashes. A key given twice in one table, a blank string, and a blank array item or one containing whitespace are refused (arrays are read as space-separated words, so such an item would vanish or split; a required check name therefore may not contain a space). `tools` lists command names as found on `PATH` (`python3`), not mise tool names (`python`). Repo-specific checks stay in the repository; `./dev ci` only runs what this file lists.
 
+## Workshop command checks
+
+The workshop's `harness.toml` runs the core list check and two checks in
+`tools/workshop/check_docs.py`. `check-docs` checks operator instructions in
+`docs/`, the root agent instructions and the core's token guide. Name the
+associated `/dev-…` command in the same paragraph or list item as a raw
+operator command.
+
+`check-paths` checks relative Markdown links, imports and literal repository
+paths in `AGENTS.md`, `CLAUDE.md` and skill files. Use an explicit relative link
+or a `./` prefix when citing a new path whose root is unfamiliar. Diagnostics
+name the source and missing target.
+
 ## Git hooks
 
 `harness/githooks/` (`.harness/githooks/` in a consumer) holds the core's two git hooks (finding K14; they keep what both live repositories' `.githooks/` did):
@@ -305,7 +318,7 @@ Sessions 26 and 27 must enumerate every repository check and release entry, sour
 |---|---|---|
 | Always | a push to `main` or `master`; a push of every branch (`--all`, `--mirror`, a bare `:`) or of a wildcard refspec (`refs/heads/*:…`); a force push (`--force`, `-f`, `--force-with-lease`, `--force-if-includes`, `+refspec`, a short-flag cluster holding `f` such as `-fu`); a remote branch deletion (`--delete`, `-d`, `:branch`, `--prune`); git's abbreviations of those long options (`--forc`, `--del`); a skipped git hook (`--no-verify` on any git command, `git commit -n`, `-c core.hooksPath=` or `--config-env=core.hooksPath=` on any git command); a git alias defined on the command line (`-c alias.…`) | PA merges; the git hooks run `./dev check` |
 | Always | `gh pr merge` and `gh pr ready`, with any flags before the group or the verb (`gh -R o/r pr merge 5`, `gh pr -R o/r merge 5`; the same holds for `gh release` and `gh api` below); the REST merge endpoint; the GraphQL mutations `mergePullRequest`, `markPullRequestReadyForReview` and `enablePullRequestAutoMerge` anywhere in a command | PA merges and marks PRs ready (session 24, K2) |
-| Always | `gh release create` (or `new`) without `--draft`/`-d`; `--draft=false` (or `0`, `f`) on `gh release create` or `edit`; a `gh api` write to a `releases` path (a POST, PATCH or PUT, or any field) without `draft=true`, or with `draft=false` | releases stay drafts until PA publishes them; with immutability on, a published release is permanent (K8) |
+| Always | `gh release create` (or `new`) without `--draft`/`-d`; `--draft=false` (or `0`, `f`) on `gh release create` or `edit`; a `gh api` write to a `releases` path (a POST, PATCH or PUT, or any field) without `draft=true`, or with `draft=false` | PA prepares publication through /dev-plugin-release in the workshop or /dev-run-with-owner-token elsewhere; with immutability on, a published release is permanent (K8) |
 | Always | a local branch deleted by force: `git branch -D`, a short-flag cluster holding `D`, or a delete flag with a force flag in any order (`-d -f`, `-df`, `--delete --force`, `--force -d`, abbreviations); `git branch -d`, `-m`, `-M`, `-f` alone and `--list` pass | nothing checks that a force-deleted branch was merged; `/dev-delete-merged-branches` deletes only what GitHub shows merged at the local tip (24g I2, 24f F2) |
 | Where nobody answers a prompt | `./dev apply`, `./dev deploy` (quoted, through a path, `mise exec`, `gh-token.sh` or `bash -c` too) and `gate release` / `gate --stage2` | the release confirms on the terminal and prompts in the Keychain |
 
@@ -354,7 +367,7 @@ Delivery, checked by hand on 2026-11-17 (session 20) with `git push --dry-run or
 | Antigravity | `agy` 1.5.10 | linked worktree | denied ("tool call denied by pre-tool hook") |
 | Codex | codex-cli 0.169.0 | plain clone, trusted, hook trusted in `/hooks` | denied ("Command blocked by PreToolUse hook") |
 
-**Codex does not load project hooks in a linked git worktree.** In a worktree of a trusted checkout, `/hooks` listed nothing, and `codex exec --trust` saved no trust for the worktree's path: Codex takes the project to be the main checkout and reads `.codex/` there, not in the worktree. In a plain clone of the same commit the hook loaded. So, in Codex, a branch's hook changes cannot be tried from its worktree, and a worktree session runs the hooks of the main checkout's branch (usually `main`). Codex lists the hook as "unnamed hook"; that is cosmetic.
+**Codex does not load project hooks in a linked git worktree.** In a worktree of a trusted checkout, `/hooks` listed nothing, and the Codex CLI trust option saved no trust for the worktree's path: Codex takes the project to be the main checkout and reads `.codex/` there, not in the worktree. In a plain clone of the same commit the hook loaded. So, in Codex, a branch's hook changes cannot be tried from its worktree, and a worktree session runs the hooks of the main checkout's branch (usually `main`). Codex lists the hook as "unnamed hook"; that is cosmetic.
 
 ## Token script
 
@@ -368,7 +381,7 @@ Session 24c changed it (finding K24, PA's yes to the interface change):
 - Every API request times out after 30 seconds.
 - Owner mode exports PA's token to the command and everything it starts, for as long as they run; nothing narrows or revokes it, so the command must be one named operation, never a shell or a tool that runs other code (`harness/gh-token.md`).
 
-Session 24h renamed the owner mode (24g row C6, PA's decision; the interface freezes at the first core tag): the argument is `owner` (`gh-token.sh owner -- CMD`), and `pa` is refused with one line naming `owner` (no alias). The Keychain item is `github-owner-token` (was `github-pa-token`); PA re-creates it once with the command `harness/gh-token.md` gives ('Owner token'). The script first reads the item's attributes, which shows no dialog and returns no secret, so a missing item (it prints the one-time `security add-generic-password` command) is told apart from a denied dialog (nothing ran; re-run and click Allow); both end with `done:`, `left for PA:` and `next:` lines. `tests/test_gh_token.py` covers both, the refusal of `pa` and a released token reaching the command.
+Session 24h renamed the owner mode (24g row C6, PA's decision; the interface freezes at the first core tag): the argument is `owner` (`gh-token.sh owner -- CMD`), and `pa` is refused with one line naming `owner` (no alias). The Keychain item is `github-owner-token` (was `github-pa-token`); Use `/dev-run-with-owner-token setup` to create the replacement Keychain item. The script first reads the item's attributes, which shows no dialog and returns no secret, so a missing item (it prints the one-time `security add-generic-password` command) is told apart from a denied dialog (nothing ran; re-run and click Allow); both end with `done:`, `left for PA:` and `next:` lines. `tests/test_gh_token.py` covers both, the refusal of `pa` and a released token reaching the command.
 
 `ha-config`'s copy (`scripts/gh-token.sh`) keeps the old interface until session 27 replaces it with the core's.
 

@@ -24,7 +24,7 @@ Same text in every repository that uses the harness core; copied from `harness/t
 
 Repo: pa-marketplace (checkout `pa-agent-kit`). Manifest and tooling only: no app runtime, no language toolchain. Read `docs/protected-main.md` for automation architecture, validation, CI and recovery, and `docs/harness-core.md` for the core contract. No vault access is needed for development checks.
 
-Use `./dev ci` for automation changes: it runs the unit tests, the online `scripts/validate-marketplace.py`, shellcheck and actionlint under the pinned tools of `mise.toml` (`./dev setup` installs them).
+Use `/dev-help` for the workshop command index. Use `./dev ci` for automation changes: it runs the unit tests, the online `scripts/validate-marketplace.py`, shellcheck and actionlint under the pinned tools of `mise.toml` (`./dev setup` installs them).
 
 ### Plugins and release
 
@@ -32,7 +32,7 @@ Use `./dev ci` for automation changes: it runs the unit tests, the online `scrip
 - Never set `version` in both `plugin.json` and the marketplace entry: `plugin.json` wins silently.
 - Never re-introduce the legacy `commit` field on github sources.
 - Portable plugins are also listed in `.agents/plugins/marketplace.json` for Codex (source local, same relative path); listing one is a manual review.
-- PA pushes `<plugin>/v<version>` on the merge commit of a version bump (tag ruleset: only PA; `harness/gh-token.sh owner -- python3 scripts/tag-release.py <plugin>`); `release.yml` then drafts the release and attaches the zips (`scripts/release-plugins.py --tag`). Publishing is manual, after assets are attached. See `docs/releases.md`.
+- Use `/dev-plugin-create` to scaffold a listed plugin. Use `/dev-plugin-release` to plan a bump PR, prepare the owner-token tag push and prepare publication after the workflow uploads the assets. See `docs/releases.md`.
 - Do not run the bumper against actual manifests merely to test it: use disposable fixtures or an explicitly authorized pin update.
 
 ### Validation
