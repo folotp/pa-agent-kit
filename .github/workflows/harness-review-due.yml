@@ -1,6 +1,6 @@
 name: Harness review due
 # Twice a year (1 May and 1 November, 06:17 UTC) opens one issue that asks PA to run the
-# `harness-review` skill on the Mac. The skill cannot run here: its probes need the installed agent
+# `dev-harness-review` skill on the Mac. The skill cannot run here: its probes need the installed agent
 # CLIs. No code is checked out and nothing is executed from the repository, so the job holds no
 # secret and needs only `issues: write`. See docs/workaround-register.md and docs/harness-core.md.
 on:
@@ -35,16 +35,18 @@ jobs:
           cat >"$RUNNER_TEMP/body.md" <<'BODY'
           A harness review is due (twice a year: May and November).
 
-          Run it on the Mac, in a checkout of this repository, in Claude Code:
+          Run it on the Mac, in the workshop checkout:
 
           ```
-          /harness-review
+          /dev-harness-review
           ```
+
+          In Codex or Antigravity, invoke the skill of the same name.
 
           It runs the workaround probes (`tools/probes/`), reads the tool pins, `specs.lock` and the agents' release notes, reviews the core and the consumers' sync state, and prints a report with numbered proposals. It applies nothing. Read the report, approve what you want, and each approved proposal becomes an ordinary branch and PR.
 
           When done: record the date, versions and decisions in `docs/workaround-register.md` (in a PR), then close this issue with the report's summary.
 
-          Opened by `.github/workflows/harness-review-due.yml`. The workaround register is `docs/workaround-register.md`; the skill is `.agents/skills/harness-review/SKILL.md`.
+          Opened by `.github/workflows/harness-review-due.yml`. The workaround register is `docs/workaround-register.md`; the skill is `.agents/skills/dev-harness-review/SKILL.md`.
           BODY
           gh issue create --title "Harness review due ($(date -u +%Y-%m))" --label "$label" --body-file "$RUNNER_TEMP/body.md"
