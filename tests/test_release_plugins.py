@@ -101,7 +101,7 @@ class PlanReleasesTests(unittest.TestCase):
         self.assertEqual(rp.release_for_tag(self.repo, "beta/v2.1.0", "HEAD~1").tag, "beta/v2.1.0")
 
     def run_draft(self, state):
-        """Run draft_release with git real and gh faked; `state` is what `gh release view` answers."""
+        """Run draft_release with git real and gh faked; `state` is what the releases list returns."""
         self.bump_beta()
         calls = []
         real_run = subprocess.run
@@ -110,10 +110,9 @@ class PlanReleasesTests(unittest.TestCase):
             if cmd[0] == "git":
                 return real_run(cmd, **kwargs)
             calls.append(cmd)
-            if cmd[:3] == ["gh", "release", "view"]:
-                if state is None:
-                    return mock.Mock(returncode=1, stdout="")
-                return mock.Mock(returncode=0, stdout=json.dumps({"isDraft": state == "draft"}))
+            if cmd == rp.RELEASE_LIST:
+                releases = [] if state is None else [{"tag_name": "beta/v2.1.0", "draft": state == "draft"}]
+                return mock.Mock(returncode=0, stdout=json.dumps([releases]))
             if cmd[:3] == ["gh", "release", "upload"]:
                 with zipfile.ZipFile(cmd[5]) as archive:  # assets exist when uploaded
                     self.assertIn(".claude-plugin/plugin.json", archive.namelist())
@@ -131,20 +130,27 @@ class PlanReleasesTests(unittest.TestCase):
     def test_new_draft_is_created_then_gets_its_zip_and_no_tag_is_made(self):
         self.run_draft(None)
         verbs = [c[2] for c in self.calls if c[:2] == ["gh", "release"]]
-        self.assertEqual(verbs, ["view", "create", "upload"])
+        self.assertEqual(self.calls[0], rp.RELEASE_LIST)
+        self.assertEqual(verbs, ["create", "upload"])
         self.assertIn("--draft", next(c for c in self.calls if c[2:3] == ["create"]))
         self.assertNotIn("--draft=false", [a for c in self.calls for a in c])
         self.assertEqual(git(self.repo, "tag", "--list"), "")  # the script never tags
 
     def test_existing_draft_is_reused_and_its_assets_replaced(self):
         self.run_draft("draft")
-        self.assertEqual([c[2] for c in self.calls if c[:2] == ["gh", "release"]], ["view", "upload"])
+        self.assertEqual([c[2] for c in self.calls if c[:2] == ["gh", "release"]], ["upload"])
         self.assertIn("--clobber", next(c for c in self.calls if c[2:3] == ["upload"]))
+
+    def test_list_error_does_not_create_another_draft(self):
+        with mock.patch.object(rp.subprocess, "run", side_effect=subprocess.CalledProcessError(1, rp.RELEASE_LIST)) as run:
+            with self.assertRaises(subprocess.CalledProcessError):
+                rp.release_state(self.repo, "beta/v2.1.0")
+            self.assertEqual(run.call_count, 1)
 
     def test_published_release_is_never_touched(self):
         with self.assertRaises(RuntimeError):
             self.run_draft("published")
-        self.assertEqual([c[2] for c in self.calls if c[:2] == ["gh", "release"]], ["view"])
+        self.assertEqual(self.calls, [rp.RELEASE_LIST])
 
 
 if __name__ == "__main__":

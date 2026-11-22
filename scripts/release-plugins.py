@@ -9,7 +9,7 @@ repository). Pushing the tag runs `release.yml`, which calls this script with
 `.plugin` zip and one zip per skill from the tagged commit (scripts/plugin_zip.py)
 and uploads them. This script never creates or moves a tag and never publishes:
 repository release immutability makes a published release and its tag permanent,
-so publish with `gh release edit <tag> --draft=false` only after checking the assets.
+so use /dev-plugin-release to check the assets and prepare publication by ID.
 
 Two modes:
   --tag <plugin>/v<version> [--head <sha>] [--dry-run]
@@ -140,13 +140,25 @@ def release_for_tag(repo: Path, tag: str, head: str) -> Release:
     return Release(plugin, rest)
 
 
+RELEASE_LIST = ("gh", "api", "--paginate", "--slurp", "repos/{owner}/{repo}/releases?per_page=100")
+
+
+def find_release(response: str, tag: str) -> dict | None:
+    """Select one exact tag from the paginated REST releases list."""
+    matches = [release for page in json.loads(response) for release in page
+               if release["tag_name"] == tag]
+    if len(matches) > 1:
+        raise ValueError(f"multiple releases are named {tag}; check the Releases page")
+    return matches[0] if matches else None
+
+
 def release_state(repo: Path, tag: str) -> str | None:
-    """Return "draft" or "published" for the release of `tag`, or None when it has none."""
-    result = subprocess.run(["gh", "release", "view", tag, "--json", "isDraft"],
-                            cwd=repo, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
+    """Look up a draft with the workflow's normal contents-write credential."""
+    result = subprocess.run(RELEASE_LIST, cwd=repo, capture_output=True, text=True, check=True)
+    release = find_release(result.stdout, tag)
+    if release is None:
         return None
-    return "draft" if json.loads(result.stdout)["isDraft"] else "published"
+    return "draft" if release["draft"] else "published"
 
 
 def draft_release(repo: Path, release: Release, sha: str) -> None:
