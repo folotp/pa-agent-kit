@@ -161,7 +161,8 @@ def create_plugin(args, repo=ROOT):
         readme.write_text(readme_text)
         raise
 
-    ending(f"scaffolded and validated plugins/{plugin}", "fill in the component stub", f"edit plugins/{plugin}/{stub_path}")
+    ending(f"scaffolded and validated plugins/{plugin}", f"fill in plugins/{plugin}/{stub_path}",
+           "command candidate to complete a plugin scaffold")
 
 
 def next_version(value, increment):
@@ -310,8 +311,8 @@ def release_plugin(args, repo=ROOT):
     if not args.increment:
         print("Claude Code: /plugin marketplace update pa-marketplace, then /reload-plugins")
         print("Codex: codex plugin marketplace upgrade")
-        ending(f"{tag} is published and immutable", "refresh the marketplace in your client",
-               "/plugin marketplace update pa-marketplace")
+        ending(f"{tag} is published and immutable", "run the marketplace refresh for Claude Code or Codex above",
+               "command candidate to refresh the marketplace after a release")
         return
 
     if not pending_pr(args, repo, source):

@@ -15,6 +15,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools/workshop"))
 import check_docs  # noqa: E402
+import harness_review  # noqa: E402
 import plugins  # noqa: E402
 
 
@@ -97,11 +98,15 @@ class CreateTests(unittest.TestCase):
     def test_dry_run_and_scaffold(self):
         args = SimpleNamespace(plugin="new-plugin", description='One "line" of text', category="tools",
                                tags="one,two", version="0.1.0", component="skills", dry_run=True)
-        with contextlib.redirect_stdout(io.StringIO()):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
             plugins.create_plugin(args, self.worktree)
             self.assertEqual(self.git("status", "--porcelain", repo=self.worktree), "")
             args.dry_run = False
             plugins.create_plugin(args, self.worktree)
+        left, next_step = output.getvalue().splitlines()[-2:]
+        self.assertIn("plugins/new-plugin/skills/new-plugin/SKILL.md", left)
+        self.assertTrue(next_step.startswith("next: command candidate"))
         marketplace = (self.worktree / plugins.CLAUDE_MARKETPLACE).read_text()
         self.assertIn('"tags": ["one", "two"]}', marketplace)
         entry = json.loads(marketplace)["plugins"][-1]
@@ -221,8 +226,26 @@ class ReleaseTests(unittest.TestCase):
 
     def test_published_release_offers_refresh_or_bump(self):
         release = {"tag_name": self.tag, "draft": False, "immutable": True}
-        self.assertIn("codex plugin marketplace upgrade", self.inspect(release=release))
+        output = self.inspect(release=release)
+        self.assertIn("codex plugin marketplace upgrade", output)
+        self.assertIn("/plugin marketplace update pa-marketplace, then /reload-plugins", output)
+        self.assertTrue(output.splitlines()[-1].startswith("next: command candidate"))
         self.assertIn("planned example 1.2.0 to 1.3.0", self.inspect(release=release, increment="minor"))
+
+
+class HarnessReviewTests(unittest.TestCase):
+    def test_success_flags_the_manual_proposal_review_as_a_command_candidate(self):
+        output = io.StringIO()
+        with (
+            mock.patch.object(sys, "argv", ["harness_review.py"]),
+            mock.patch.object(harness_review, "report", return_value=0),
+            mock.patch.object(harness_review.shutil, "which", return_value=None),
+            contextlib.redirect_stdout(output),
+        ):
+            self.assertEqual(harness_review.main(), 0)
+        left, next_step = output.getvalue().splitlines()[-2:]
+        self.assertIn("proposals", left)
+        self.assertTrue(next_step.startswith("next: command candidate"))
 
 
 if __name__ == "__main__":

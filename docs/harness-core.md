@@ -116,7 +116,9 @@ The workshop's `harness.toml` runs the core list check and two checks in
 `tools/workshop/check_docs.py`. `check-docs` checks operator instructions in
 `docs/`, the root agent instructions and the core's token guide. Name the
 associated `/dev-…` command in the same paragraph or list item as a raw
-operator command.
+operator command. For a manual step awaiting a dev command, describe the
+action in `left for PA:` and label the proposed command in `next:` as a
+command candidate.
 
 `check-paths` checks relative Markdown links, imports and literal repository
 paths in `AGENTS.md`, `CLAUDE.md` and skill files. Use an explicit relative link

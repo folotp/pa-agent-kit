@@ -57,7 +57,8 @@ def main():
         if result == 10:
             result = 10 if report([str(ROOT / probe)]) == 10 else 2
         print(f"{probe}: " + {0: "still needed", 10: "propose removal"}.get(result, "inconclusive"))
-    ending("collected workshop review evidence", "decide which proposals should become PRs", "review the numbered proposals")
+    ending("collected workshop review evidence", "review the numbered proposals and decide which should become PRs",
+           "command candidate to record harness review decisions")
     return 0
 
 
