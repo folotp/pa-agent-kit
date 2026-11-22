@@ -140,6 +140,142 @@ class WriteTokenWorkflowTest(unittest.TestCase):
         self.assertLess(steps[-1].index('"specs.lock" ]'), steps[-1].index("push origin"))
 
 
+class MiseBumpTemplateTest(unittest.TestCase):
+    """harness/templates/mise-bump.yml (session 29d): the job that moves the mise pins, because
+    Dependabot cannot update mise.toml or mise.lock. The workshop's own .github/workflows copy is
+    the template byte for byte; a live repository copies the template as its own workflow. These
+    hold the token discipline of specs-bump.yml (K11) and the contracts found by probing mise."""
+
+    ROOT = Path(__file__).resolve().parents[1]
+    TEMPLATE = ROOT / "harness" / "templates" / "mise-bump.yml"
+
+    def setUp(self):
+        self.text = self.TEMPLATE.read_text()
+        self.job = jobs(self.text)["bump"]
+        self.steps = self.job.split("      - name: ")
+
+    def test_the_workshop_runs_the_template_unchanged(self):
+        self.assertEqual((WORKFLOWS / "mise-bump.yml").read_text(), self.text)
+
+    def test_every_mise_pin_of_the_workshop_is_the_same(self):
+        files = [
+            WORKFLOWS / "validate.yml",
+            WORKFLOWS / "specs-bump.yml",
+            WORKFLOWS / "mise-bump.yml",
+            self.ROOT / "harness" / "templates" / "ci.yml",
+            self.TEMPLATE,
+        ]
+        for key in ("MISE_VERSION", "MISE_SHA256"):
+            pattern = re.compile(rf"^\s+{key}: (\S+)$", re.M)
+            values = {path.name: pattern.search(path.read_text()).group(1) for path in files}
+            with self.subTest(key):
+                self.assertEqual(len(set(values.values())), 1, values)
+
+    def test_the_minimum_mise_version_has_the_flags_the_job_uses(self):
+        # `--vulnerable` and `mise audit` arrived in 2026.11.12; 2026.11.9 has neither.
+        pinned = re.search(r"MISE_VERSION: v(\S+)", self.job).group(1)
+        minimum = re.search(r'^min_version = "([^"]+)"', (self.ROOT / "mise.toml").read_text(), re.M).group(1)
+        as_tuple = lambda v: tuple(int(p) for p in v.split("."))
+        self.assertGreaterEqual(as_tuple(minimum), (2026, 11, 12))
+        self.assertGreaterEqual(as_tuple(pinned), as_tuple(minimum))
+
+    def test_no_permission_at_the_top_and_write_only_on_the_one_job(self):
+        self.assertIn("\npermissions: {}\n", self.text)
+        self.assertEqual(list(jobs(self.text)), ["bump"])
+        self.assertEqual(len(re.findall(r"contents: write", self.text)), 1)
+        self.assertIn("    permissions:\n      contents: write", self.job)
+        self.assertRegex(self.job, r"\n    timeout-minutes: \d+\n")
+
+    def test_it_never_runs_on_pull_request_target_or_workflow_run(self):
+        self.assertNotRegex(self.text, r"(?m)^\s+(pull_request_target|workflow_run):")
+
+    def test_both_kinds_are_scheduled_off_the_other_scheduled_jobs(self):
+        crons = re.findall(r'- cron: "([^"]+)"', self.text)
+        self.assertEqual(crons, ["23 5 8 * *", "41 7 * * 3"])
+        # specs-bump.yml runs Mondays 06:17 UTC; harness-review-due.yml on the 1st.
+        self.assertNotIn("17 6 * * 1", crons)
+        self.assertIn("options: [version, security]", self.text)
+
+    def test_the_credential_is_never_kept_and_only_the_last_step_names_the_token(self):
+        self.assertIn("persist-credentials: false", self.text)
+        self.assertNotIn("persist-credentials: true", self.text)
+        self.assertEqual([s.split("\n", 1)[0] for s in self.steps if "github.token" in s], ["Open the bump PR"])
+        self.assertTrue(self.steps[-1].startswith("Open the bump PR"))
+        self.assertNotRegex(self.job, r"run:[^\n]*\$\{\{")
+
+    def test_the_branch_may_carry_the_pins_and_nothing_else_and_is_checked_before_the_push(self):
+        last = self.steps[-1]
+        self.assertIn('changed="$(git diff --name-only "origin/$DEFAULT_BRANCH...HEAD")"', last)
+        self.assertIn(r"^(mise\.toml|mise\.lock|\.mise/locks/.+)$", last)
+        self.assertLess(last.index(r"\.mise/locks/.+"), last.index("push origin"))
+        self.assertLess(last.index("git commit"), last.index(r"\.mise/locks/.+"))
+
+    def test_one_open_pr_per_kind_and_the_prefixes(self):
+        last = self.steps[-1]
+        self.assertIn('prefix="mise-bump"', last)
+        self.assertIn('prefix="mise-security"', last)
+        self.assertLess(last.index("gh pr list --state open"), last.index("git switch -c"))
+
+    def test_the_pins_are_upgraded_before_the_lock_is_installed_again(self):
+        names = [s.split("\n", 1)[0] for s in self.steps[1:]]
+        self.assertLess(names.index("Install pinned tools"), names.index("Upgrade the pins"))
+        self.assertLess(names.index("Upgrade the pins"), names.index("Install from the new lock"))
+        self.assertLess(names.index("Install from the new lock"), names.index("Open the bump PR"))
+        self.assertIn("run: ./dev setup", self.steps[names.index("Install from the new lock") + 1])
+
+    def test_the_upgrade_uses_what_the_probe_of_mise_found(self):
+        upgrade = next(s for s in self.steps if s.startswith("Upgrade the pins"))
+        # `--bump` writes versions the locked setting would refuse, for this one command only.
+        self.assertIn("export MISE_LOCKED=0", upgrade)
+        self.assertLess(upgrade.index("export MISE_LOCKED=0"), upgrade.index("mise upgrade --bump"))
+        self.assertIn("unset MISE_LOCKED", upgrade)
+        self.assertIn("--minimum-release-age 7d", upgrade)
+        self.assertIn("--vulnerable", upgrade)
+        # Runtimes stay on their line (python major.minor, node major) instead of crossing it.
+        self.assertIn("--exclude python --exclude node", upgrade)
+        self.assertIn('lines+=("python@$python_line")', upgrade)
+        self.assertIn('lines+=("node@$node_line")', upgrade)
+        self.assertIn("--bump --pin", upgrade)
+        # A release-age hold lowered a newer pin in mise 2026.11.9: refuse any downgrade.
+        self.assertIn("an older version", upgrade)
+
+    def test_the_security_kind_has_no_release_age_hold(self):
+        upgrade = next(s for s in self.steps if s.startswith("Upgrade the pins"))
+        security = upgrade[upgrade.index('if [ "$KIND" = security ]'):upgrade.index("export MISE_LOCKED=0")]
+        self.assertIn("flags=(--vulnerable)", security)
+        self.assertNotIn("minimum-release-age", security.split("else")[0])
+
+    def test_the_pr_body_does_not_claim_a_full_ci_run(self):
+        # `./dev setup` ends with `./dev check`, not `./dev ci`; the PR's own required check runs
+        # `./dev ci` with the new tools (Codex review of PR 107).
+        last = self.steps[-1]
+        self.assertIn(r"\`./dev ci\` has not run on the new tools yet", last)
+        self.assertNotIn("checks passed", last)
+        self.assertNotIn("./dev ci", [s for s in self.steps if s.startswith("Install from the new lock")][0].split("run:")[1])
+
+    def test_nothing_is_downloaded_into_the_checkout(self):
+        # The job stages the whole tree (`git add -A`) and then allows three paths: a binary left
+        # in the repository root would fail every run before the push (Codex review of PR 107).
+        install = next(s for s in self.steps if s.startswith("Install pinned mise"))
+        self.assertIn('-o "$RUNNER_TEMP/mise"', install)
+        self.assertNotRegex(install, r"curl [^\n]*-o mise\b")
+        self.assertIn('install -m 0755 "$RUNNER_TEMP/mise"', install)
+
+    def test_the_mise_binary_is_reported_and_never_edited(self):
+        check = next(s for s in self.steps if s.startswith("Check the pinned mise binary"))
+        self.assertIn("api.github.com/repos/jdx/mise/releases", check)
+        self.assertIn("7 days ago", check)
+        self.assertNotIn("github.token", check)
+        self.assertNotRegex(self.job, r"(?m)^\s+(sed -i|git add [^\n]*\.github)")
+
+    def test_its_actions_pass_the_pin_check(self):
+        with tempfile.TemporaryDirectory() as root:
+            target = Path(root) / ".github" / "workflows" / "mise-bump.yml"
+            target.parent.mkdir(parents=True)
+            target.write_text(self.text)
+            self.assertEqual(check_pins(root), (0, ""))
+
+
 CHECK_PINS = Path(__file__).resolve().parents[1] / "harness" / "check-pins"
 SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1"
 REFUSAL = "is not pinned: use the full commit SHA with a # vX.Y.Z comment"

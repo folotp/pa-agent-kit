@@ -12,6 +12,10 @@
 #       - "/.github/actions/*"
 # Schedule, group and commit prefix are this repository's choice.
 #
+# Dependabot has no mise ecosystem: the pins of mise.toml and mise.lock move by the mise-bump job
+# (harness/templates/mise-bump.yml, adopted by copy like ci.yml), monthly with a 7-day release age
+# and weekly for security updates. The mise binary pin of the workflows is only reported by it.
+#
 # Other ecosystems (pip, npm, docker, terraform, …) are added below by the repository, as further
 # entries of `updates:`.
 version: 2

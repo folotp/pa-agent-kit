@@ -33,6 +33,7 @@ Every core file serves two or more repositories and is tested in the workshop. T
 | Git hooks and client bindings | Core templates and checks. A consumer merges its own hooks when adopting the guard. |
 | Actions pins | Core check for workflows and local composite actions. |
 | Dependabot | Core starter and minimum Actions policy. Consumers choose schedules, groups, prefixes and other ecosystems. |
+| Mise pins | Core template of the update job (`templates/mise-bump.yml`), adopted by copy like `ci.yml`; Dependabot has no mise ecosystem. The repository owns the workflow file, its schedule and its commit prefix. |
 | Agent instructions | Core starter and marked shared block. Repository sections contain local rules. |
 | CI | Core skeleton and missing-workflow report. The repository owns workflow files, aggregate jobs and any Claude job result checks. |
 | Commands and guidance | Core index, status, nine skills, discovery links, refusal guidance and next-step output. Workshop tests cover the command contract. |
@@ -139,6 +140,8 @@ name the source and missing target.
 ## Pins
 
 `mise.toml` pins every tool that `./dev ci` calls; `mise.lock` holds checksums for `macos-arm64` and `linux-x64`. Settings in `mise.toml` turn every implicit install off. To change a pin, edit `mise.toml`, run `mise lock --platform macos-arm64,linux-x64`, then `./dev setup`, and commit both files. `config/toolchain.json` (a minimum-version check that pinned nothing) is gone; mise is the single source of tool versions.
+
+**How pins move.** Pins move in three ways: Dependabot moves the SHA-pinned actions (`.github/dependabot.yml`); the mise-bump job (`mise-bump.yml`) moves the mise pins of `mise.toml` and `mise.lock`, which Dependabot cannot update: monthly versions with a 7-day release age, weekly security updates; the twice-yearly harness review covers the rest, the mise binary pin of the workflows included. The job (`harness/templates/mise-bump.yml`; the workshop runs the same bytes as `.github/workflows/mise-bump.yml`, a live repository takes a copy) runs `mise upgrade --bump` with `--minimum-release-age 7d` monthly and `--bump --vulnerable` weekly (OSV.dev, no age hold), keeps `python` on its major.minor line and `node` on its major line, installs the new lock before the push, and limits the branch to `mise.toml`, `mise.lock` and `.mise/locks/`; one PR per kind, never merged by the job. It reports a newer mise release at least 7 days old but never edits the workflows: a bot cannot push workflow files, so a person raises `MISE_VERSION`, `MISE_SHA256` and, when needed, `min_version`. The job needs mise 2026.11.12 or later (`--vulnerable`; 2026.11.9 has neither it nor `mise audit`). The harness review checks whether GitHub's Dependabot supported-ecosystems page lists mise as generally available, to replace the job with a `mise` entry in `dependabot.yml`.
 
 ## Tests
 

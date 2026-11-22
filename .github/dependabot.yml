@@ -1,6 +1,9 @@
 # Version updates for the SHA-pinned actions only (report 2.8): monthly, in one PR, and only for
-# releases at least 7 days old. Every other pin moves in the twice-yearly harness review; security
-# updates (a repository setting) cover the gap. Aligned in session 24b (K13).
+# releases at least 7 days old. Pins move in three ways: Dependabot moves these actions; the
+# mise-bump job (mise-bump.yml) moves the mise pins of mise.toml and mise.lock, which Dependabot
+# cannot update (monthly versions with a 7-day release age, weekly security updates); the
+# twice-yearly harness review covers the rest, the mise binary pin of the workflows included.
+# Aligned in session 24b (K13), amended in session 29d.
 version: 2
 updates:
   - package-ecosystem: github-actions

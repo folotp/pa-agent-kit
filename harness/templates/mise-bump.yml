@@ -1,0 +1,244 @@
+# Mise bump job of the harness core (.harness/templates/mise-bump.yml). Dependabot cannot update
+# `mise.toml` or `mise.lock`, so this job does for the mise pins what Dependabot does for the
+# actions. `./dev sync` never writes it (a bot cannot push a workflow file); to adopt it, copy it to
+# .github/workflows/mise-bump.yml and have PA push that commit with the owner token
+# (/dev-run-with-owner-token). From then on it is the repository's file.
+#
+# Two kinds, one PR each, never more than one open PR per kind:
+#   version   monthly. `mise upgrade --bump` with a minimum release age of 7 days (the cooldown of
+#             dependabot.yml). `python` stays on its major.minor line and `node` on its major
+#             line; every other tool moves to the newest release that is old enough.
+#   security  weekly. `mise upgrade --bump --vulnerable`: only the tools that OSV.dev lists as
+#             vulnerable (as `mise audit`), no release-age hold, runtimes on their line.
+# A manual run (`workflow_dispatch`) takes the kind as input.
+#
+# The mise binary itself (MISE_VERSION, MISE_SHA256 here and in the other workflows, `min_version`
+# in mise.toml) is only reported in the PR body or the job summary when a release at least 7 days
+# old is newer: a workflow-file change needs PA's token, which a bot job never holds.
+#
+# Token discipline (session 24, K11): the job token can write contents, so it stays out of
+# .git/config and out of the steps that download tools or read upstream pages; only the last step
+# holds it, as a header for the one push. The bump branch may carry `mise.toml`, `mise.lock` and
+# the `.mise/locks/` files of npm tools, and nothing else.
+#
+# Repository choices: the commit prefix (COMMIT_PREFIX) and the schedule.
+name: Mise bump
+on:
+  schedule:
+    - cron: "23 5 8 * *" # version: the 8th of each month, 05:23 UTC
+    - cron: "41 7 * * 3" # security: Wednesdays 07:41 UTC
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: "version: bump every pin (7-day release age); security: upgrade vulnerable pins only"
+        type: choice
+        options: [version, security]
+        default: version
+permissions: {}
+concurrency:
+  group: mise-bump-${{ github.event_name == 'workflow_dispatch' && inputs.kind || (github.event.schedule == '41 7 * * 3' && 'security' || 'version') }}
+  cancel-in-progress: false
+jobs:
+  bump:
+    name: Bump mise pins
+    # A manual run from another branch would branch from the wrong base.
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # push the bump branch
+      pull-requests: write # open the PR
+    env:
+      MISE_VERSION: v2026.11.12
+      # sha256 of the linux-x64 binary, from SHASUMS256.txt of the mise release
+      MISE_SHA256: 9c12c24f5eac6b6357e5265e2629166cc3005459037f5d747680a99e375ff2ab
+      KIND: ${{ github.event_name == 'workflow_dispatch' && inputs.kind || (github.event.schedule == '41 7 * * 3' && 'security' || 'version') }}
+      COMMIT_PREFIX: chore(mise)
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      NO_COLOR: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned mise
+        run: |
+          set -euo pipefail
+          # Outside the checkout: `git add -A` below must find only what the bump changed.
+          curl -fsSL -o "$RUNNER_TEMP/mise" "https://github.com/jdx/mise/releases/download/${MISE_VERSION}/mise-${MISE_VERSION}-linux-x64"
+          echo "${MISE_SHA256}  $RUNNER_TEMP/mise" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 "$RUNNER_TEMP/mise" "$HOME/.local/bin/mise"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # No token: mise.lock pins direct release URLs, so the downloads need no API rate limit.
+      # `--vulnerable` reads the installed versions, so the tools of the lock are installed first.
+      - name: Install pinned tools
+        run: ./dev setup
+
+      # Read only, no token: lists the newest releases of mise and compares the newest one that is
+      # at least 7 days old with the pinned binary. A failed read is reported, not fatal.
+      - name: Check the pinned mise binary
+        run: |
+          set -euo pipefail
+          {
+            echo "### The mise binary"
+            echo
+            if releases="$(curl -fsSL --retry 2 "https://api.github.com/repos/jdx/mise/releases?per_page=30")"; then
+              cutoff="$(date -u -d '7 days ago' +%s)"
+              newest="$(jq -r --argjson cutoff "$cutoff" '[.[] | select((.draft | not) and (.prerelease | not) and ((.published_at | fromdateiso8601) <= $cutoff))][0].tag_name // empty' <<<"$releases")"
+              if [ -z "$newest" ]; then
+                echo "No release at least 7 days old was found among the last 30 releases."
+              elif [ "$(printf '%s\n%s\n' "$newest" "$MISE_VERSION" | sort -V | tail -n1)" = "$MISE_VERSION" ]; then
+                echo "The pinned \`$MISE_VERSION\` is not older than the newest release at least 7 days old (\`$newest\`)."
+              else
+                echo "A newer release at least 7 days old exists: \`$newest\` (pinned: \`$MISE_VERSION\`)."
+                echo "To raise it, a person changes \`MISE_VERSION\` and \`MISE_SHA256\` (the linux-x64 line of the release's SHASUMS256.txt) in every workflow, and \`min_version\` in \`mise.toml\` if the new features are needed. This job never edits workflow files."
+              fi
+            else
+              echo "The releases of mise could not be read (GitHub API unavailable); not checked this run."
+            fi
+          } > "$RUNNER_TEMP/mise-binary.md"
+          cat "$RUNNER_TEMP/mise-binary.md"
+
+      # No token. `MISE_LOCKED=0` is for this one command: with `locked = true`, mise refuses a
+      # version that is not in the lock yet, and it rewrites the lock (both platforms) itself.
+      - name: Upgrade the pins
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          log="$RUNNER_TEMP/mise-upgrade.log"
+          : > "$log"
+
+          # The runtimes keep their line: python by major.minor, node by major.
+          lines=()
+          python_line="$(sed -nE 's/^python = "([0-9]+\.[0-9]+)\.[0-9]+"$/\1/p' mise.toml)"
+          node_line="$(sed -nE 's/^node = "([0-9]+)\.[0-9]+\.[0-9]+"$/\1/p' mise.toml)"
+          if [ -n "$python_line" ]; then lines+=("python@$python_line"); fi
+          if [ -n "$node_line" ]; then lines+=("node@$node_line"); fi
+
+          # Never empty, so the expansions below are safe under `set -u` in any bash.
+          if [ "$KIND" = security ]; then
+            flags=(--vulnerable)
+          else
+            flags=(--minimum-release-age 7d)
+          fi
+
+          export MISE_LOCKED=0
+          mise upgrade --bump --yes --no-prune "${flags[@]}" --exclude python --exclude node 2>&1 | tee -a "$log"
+          if [ "${#lines[@]}" -gt 0 ]; then
+            mise upgrade --bump --pin --yes --no-prune "${flags[@]}" "${lines[@]}" 2>&1 | tee -a "$log"
+          fi
+          unset MISE_LOCKED
+
+          # Old and new version of each tool in [tools].
+          tools() {
+            awk '/^\[/ { in_tools = ($0 == "[tools]"); next }
+                 in_tools && /^"?[^" =#]+"? *= *"[^"]+"/ {
+                   line = $0; gsub(/"/, "", line)
+                   split(line, kv, / *= */); split(kv[2], v, / /)
+                   print kv[1], v[1] }' | sort
+          }
+          git show HEAD:mise.toml | tools > "$RUNNER_TEMP/tools-old.txt"
+          tools < mise.toml > "$RUNNER_TEMP/tools-new.txt"
+          join "$RUNNER_TEMP/tools-old.txt" "$RUNNER_TEMP/tools-new.txt" | awk '$2 != $3' > "$RUNNER_TEMP/tools-changed.txt"
+
+          # A release-age hold must never lower a pin that is already newer (mise 2026.11.9 did).
+          failed=0
+          while read -r name old new; do
+            if [ "$(printf '%s\n%s\n' "$old" "$new" | sort -V | head -n1)" = "$new" ]; then
+              echo "::error::$name would go from $old to $new, an older version"
+              failed=1
+            fi
+          done < "$RUNNER_TEMP/tools-changed.txt"
+          [ "$failed" -eq 0 ] || exit 1
+
+          {
+            if [ -s "$RUNNER_TEMP/tools-changed.txt" ]; then
+              echo "| Tool | Old | New |"
+              echo "|---|---|---|"
+              while read -r name old new; do echo "| \`$name\` | $old | $new |"; done < "$RUNNER_TEMP/tools-changed.txt"
+            else
+              echo "No pinned version changed."
+            fi
+            held="$(grep 'ignored by minimum_release_age' "$log" | sed -E 's/^mise +WARN +//' | sort -u || true)"
+            if [ -n "$held" ]; then
+              echo
+              echo "Held back by the 7-day release age (mise's own report):"
+              echo
+              printf '%s\n' "$held" | sed 's/^/- /'
+            fi
+            other="$(grep 'WARN' "$log" | grep -v 'ignored by minimum_release_age\|HTTP GET\|mise-versions endpoint' | sed -E 's/^mise +WARN +//' | sort -u | head -n 20 || true)"
+            if [ -n "$other" ]; then
+              echo
+              echo "Other mise warnings:"
+              echo
+              printf '%s\n' "$other" | sed 's/^/- /'
+            fi
+          } > "$RUNNER_TEMP/changes.md"
+
+      # Proves the PR never carries a lock that does not install: the locked install of the new
+      # lock, then `./dev check` (what `./dev setup` ends with). `./dev ci` is not run here: the
+      # PR's own required check runs it with the new tools, and a failure there must show on the
+      # PR instead of keeping the PR from being opened.
+      - name: Install from the new lock
+        run: ./dev setup
+
+      - name: Open the bump PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "$KIND" in
+            version) prefix="mise-bump"; subject="bump pinned tools" ;;
+            security) prefix="mise-security"; subject="security updates for pinned tools" ;;
+            *) echo "::error::unknown kind: $KIND"; exit 1 ;;
+          esac
+          git add -A
+          if git diff --cached --quiet; then
+            {
+              echo "## Nothing moved ($KIND)"
+              echo
+              cat "$RUNNER_TEMP/changes.md"
+              echo
+              cat "$RUNNER_TEMP/mise-binary.md"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          open="$(gh pr list --state open --json headRefName --jq "[.[] | select(.headRefName | startswith(\"$prefix/\"))] | length")"
+          if [ "$open" -gt 0 ]; then
+            echo "A $prefix PR is already open: merge or close it first. Upstream moves are picked up on the next run."
+            exit 0
+          fi
+          branch="$prefix/$(date -u +%Y-%m-%d)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -m "$COMMIT_PREFIX: $subject"
+          # The branch carries the pins and nothing else: a step that changed another file (a
+          # tool, an upstream page) cannot get it pushed with the write token.
+          changed="$(git diff --name-only "origin/$DEFAULT_BRANCH...HEAD")"
+          unexpected="$(printf '%s\n' "$changed" | grep -Ev '^(mise\.toml|mise\.lock|\.mise/locks/.+)$' || true)"
+          if [ -n "$unexpected" ]; then
+            echo "::error::the bump branch would change more than mise.toml, mise.lock and .mise/locks/:"
+            printf '%s\n' "$unexpected"
+            exit 1
+          fi
+          # The token goes in as a header for this one command, as actions/checkout would set it.
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/$branch"
+          {
+            if [ "$KIND" = security ]; then
+              echo "Weekly security update: \`mise upgrade --bump --vulnerable\` (OSV.dev, no release-age hold; python and node stay on their line) moved:"
+            else
+              echo "Monthly version update: \`mise upgrade --bump\` with a 7-day minimum release age (python and node stay on their line) moved:"
+            fi
+            echo
+            cat "$RUNNER_TEMP/changes.md"
+            echo
+            cat "$RUNNER_TEMP/mise-binary.md"
+            echo
+            echo "The new lock installs (\`./dev setup\` ran from it, which ends with \`./dev check\`). \`./dev ci\` has not run on the new tools yet: read this PR's own required check before merging; if it shows as waiting for approval, a maintainer approves it. A person merges."
+          } > "$RUNNER_TEMP/body.md"
+          gh pr create --base "$DEFAULT_BRANCH" --head "$branch" --title "$COMMIT_PREFIX: $subject ($(date -u +%Y-%m-%d))" --body-file "$RUNNER_TEMP/body.md"
