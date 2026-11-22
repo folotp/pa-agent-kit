@@ -453,4 +453,4 @@ The sync refuses a target that is not the top of a work tree, is the workshop, h
 
 ## Workaround register and harness review
 
-`docs/workaround-register.md` lists every workaround with its reason, exit condition and probe (`tools/probes/`); `tests/test_register.py` keeps it complete. The `harness-review` skill (`.agents/skills/harness-review/`) runs the probes and reads the pins, `specs.lock` and the agents' release notes twice a year, in the workshop and only proposes changes. Consumer review is deferred beyond the first tag. `.github/workflows/harness-review-due.yml` opens the issue when a review is due.
+`docs/workaround-register.md` lists every workaround with its reason, exit condition and probe (`tools/probes/`); `tests/test_register.py` keeps it complete. The `/dev-harness-review` skill (`.agents/skills/dev-harness-review/`) runs the probes and reads the pins, `specs.lock` and the agents' release notes twice a year, in the workshop and only proposes changes. Consumer review is deferred beyond the first tag. `.github/workflows/harness-review-due.yml` opens the issue when a review is due.

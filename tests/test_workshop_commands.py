@@ -59,7 +59,7 @@ class DocCheckTests(unittest.TestCase):
             env = {**os.environ, "HOME": directory, "GH_CONFIG_DIR": directory}
             listing = subprocess.check_output(["harness/commands", "list"], cwd=ROOT,
                                               text=True, env=env)
-        for command in ("dev-plugin-create", "dev-plugin-release"):
+        for command in ("dev-harness-review", "dev-plugin-create", "dev-plugin-release"):
             with self.subTest(command=command):
                 self.assertEqual(listing.count(f"  /{command} — "), 1)
 

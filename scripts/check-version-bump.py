@@ -78,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
     for path, version in missing:
         print(
             f"check-version-bump: FAIL: {path} changed but its version is still {version}: "
-            f"bump it in its plugin.json (/bump-plugin) in this PR",
+            f"bump it in its plugin.json in this PR, then use /dev-plugin-release after merge",
             file=sys.stderr,
         )
     if missing:

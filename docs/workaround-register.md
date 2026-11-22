@@ -7,7 +7,7 @@ Every workaround the harness carries is an entry here, so that none outlives its
 - **Probe:** a script under `tools/probes/` that tests the exit condition. Exit code 0: still needed. 10: the condition is met. 2: inconclusive (agent CLI missing, no network, manual step pending). A probe only reports; it edits nothing.
 - **Last result:** date, tool versions, what the probe said, and what was decided.
 
-The `harness-review` skill (`.agents/skills/harness-review/`) runs the probes twice a year on the Mac, because they need the installed agent CLIs and network access to their APIs. The skill proposes; removing a workaround is a normal PR that PA merges. A new workaround is added in the same PR that introduces it. Format, in one line per field, so that the test and the skill can read it: a level-3 heading `### <id>`, then bullets starting with the four field names above in bold.
+The `/dev-harness-review` skill (`.agents/skills/dev-harness-review/`) runs the probes twice a year on the Mac, because they need the installed agent CLIs and network access to their APIs. The skill proposes; removing a workaround is a normal PR that PA merges. A new workaround is added in the same PR that introduces it. Format, in one line per field, so that the test and the skill can read it: a level-3 heading `### <id>`, then bullets starting with the four field names above in bold.
 
 ## Entries
 

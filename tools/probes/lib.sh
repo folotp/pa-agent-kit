@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared helpers of the workaround probes (docs/workaround-register.md). Sourced, never run.
 #
-# Exit-code contract of every probe, so that harness-review can read the result without parsing text:
+# Exit-code contract of every probe, so that /dev-harness-review can read the result without parsing text:
 #   0   the workaround is still needed (the exit condition is NOT met)
 #   10  the exit condition is met: the workaround can be proposed for removal
 #   2   inconclusive (agent CLI missing, no network, unexpected output): nothing is concluded
