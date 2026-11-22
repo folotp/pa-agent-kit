@@ -243,6 +243,6 @@ jobs:
             echo
             echo "Left for PA: read that check, then merge; the job never merges. If the check shows as waiting for approval, approving the run on GitHub is a step with no \`/dev-\` command yet (a candidate for one)."
             echo
-            echo "Next step: merge this PR once its required check passes."
+            echo "Next step: merge this PR once its required check passes (merging has no \`/dev-\` command: a candidate for one)."
           } > "$RUNNER_TEMP/body.md"
           gh pr create --base "$DEFAULT_BRANCH" --head "$branch" --title "$COMMIT_PREFIX: $subject ($(date -u +%Y-%m-%d))" --body-file "$RUNNER_TEMP/body.md"

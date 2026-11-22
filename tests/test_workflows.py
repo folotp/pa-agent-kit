@@ -262,6 +262,8 @@ class MiseBumpTemplateTest(unittest.TestCase):
         self.assertLess(body.index("Left for PA:"), body.index("Next step:"))
         self.assertIn("a candidate for one", body)
         self.assertEqual(body.count("Next step:"), 1)
+        # The merge has no /dev- command either: the final instruction carries the qualification.
+        self.assertRegex(body[body.index("Next step:"):], r"merge this PR[^\n]*a candidate for one")
 
     def test_nothing_is_downloaded_into_the_checkout(self):
         # The job stages the whole tree (`git add -A`) and then allows three paths: a binary left
