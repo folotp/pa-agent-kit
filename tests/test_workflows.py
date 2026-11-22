@@ -245,6 +245,14 @@ class MiseBumpTemplateTest(unittest.TestCase):
         self.assertIn("flags=(--vulnerable)", security)
         self.assertNotIn("minimum-release-age", security.split("else")[0])
 
+    def test_nothing_is_downloaded_into_the_checkout(self):
+        # The job stages the whole tree (`git add -A`) and then allows three paths: a binary left
+        # in the repository root would fail every run before the push (Codex review of PR 107).
+        install = next(s for s in self.steps if s.startswith("Install pinned mise"))
+        self.assertIn('-o "$RUNNER_TEMP/mise"', install)
+        self.assertNotRegex(install, r"curl [^\n]*-o mise\b")
+        self.assertIn('install -m 0755 "$RUNNER_TEMP/mise"', install)
+
     def test_the_mise_binary_is_reported_and_never_edited(self):
         check = next(s for s in self.steps if s.startswith("Check the pinned mise binary"))
         self.assertIn("api.github.com/repos/jdx/mise/releases", check)

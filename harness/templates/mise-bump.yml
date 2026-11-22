@@ -64,10 +64,11 @@ jobs:
       - name: Install pinned mise
         run: |
           set -euo pipefail
-          curl -fsSL -o mise "https://github.com/jdx/mise/releases/download/${MISE_VERSION}/mise-${MISE_VERSION}-linux-x64"
-          echo "${MISE_SHA256}  mise" | sha256sum -c -
+          # Outside the checkout: `git add -A` below must find only what the bump changed.
+          curl -fsSL -o "$RUNNER_TEMP/mise" "https://github.com/jdx/mise/releases/download/${MISE_VERSION}/mise-${MISE_VERSION}-linux-x64"
+          echo "${MISE_SHA256}  $RUNNER_TEMP/mise" | sha256sum -c -
           mkdir -p "$HOME/.local/bin"
-          install -m 0755 mise "$HOME/.local/bin/mise"
+          install -m 0755 "$RUNNER_TEMP/mise" "$HOME/.local/bin/mise"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       # No token: mise.lock pins direct release URLs, so the downloads need no API rate limit.
