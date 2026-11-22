@@ -245,6 +245,14 @@ class MiseBumpTemplateTest(unittest.TestCase):
         self.assertIn("flags=(--vulnerable)", security)
         self.assertNotIn("minimum-release-age", security.split("else")[0])
 
+    def test_the_pr_body_does_not_claim_a_full_ci_run(self):
+        # `./dev setup` ends with `./dev check`, not `./dev ci`; the PR's own required check runs
+        # `./dev ci` with the new tools (Codex review of PR 107).
+        last = self.steps[-1]
+        self.assertIn(r"\`./dev ci\` has not run on the new tools yet", last)
+        self.assertNotIn("checks passed", last)
+        self.assertNotIn("./dev ci", [s for s in self.steps if s.startswith("Install from the new lock")][0].split("run:")[1])
+
     def test_nothing_is_downloaded_into_the_checkout(self):
         # The job stages the whole tree (`git add -A`) and then allows three paths: a binary left
         # in the repository root would fail every run before the push (Codex review of PR 107).

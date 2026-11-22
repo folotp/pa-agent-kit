@@ -178,7 +178,9 @@ jobs:
           } > "$RUNNER_TEMP/changes.md"
 
       # Proves the PR never carries a lock that does not install: the locked install of the new
-      # lock, then the repository's checks.
+      # lock, then `./dev check` (what `./dev setup` ends with). `./dev ci` is not run here: the
+      # PR's own required check runs it with the new tools, and a failure there must show on the
+      # PR instead of keeping the PR from being opened.
       - name: Install from the new lock
         run: ./dev setup
 
@@ -237,6 +239,6 @@ jobs:
             echo
             cat "$RUNNER_TEMP/mise-binary.md"
             echo
-            echo "The new lock installs (\`./dev setup\` ran from it) and the repository's checks passed on it. The required check comes from this PR's own run; if it shows as waiting for approval, a maintainer approves it. A person merges."
+            echo "The new lock installs (\`./dev setup\` ran from it, which ends with \`./dev check\`). \`./dev ci\` has not run on the new tools yet: read this PR's own required check before merging; if it shows as waiting for approval, a maintainer approves it. A person merges."
           } > "$RUNNER_TEMP/body.md"
           gh pr create --base "$DEFAULT_BRANCH" --head "$branch" --title "$COMMIT_PREFIX: $subject ($(date -u +%Y-%m-%d))" --body-file "$RUNNER_TEMP/body.md"
