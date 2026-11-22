@@ -15,9 +15,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      MISE_VERSION: v2026.11.9
+      MISE_VERSION: v2026.11.12
       # sha256 of the linux-x64 binary, from SHASUMS256.txt of the mise release
-      MISE_SHA256: f13f3e5ec88807e0161669b3aa07a91d84478cdf1e95b5b92b63f85a25d42395
+      MISE_SHA256: 9c12c24f5eac6b6357e5265e2629166cc3005459037f5d747680a99e375ff2ab
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

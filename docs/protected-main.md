@@ -21,9 +21,9 @@
 
 The release procedure and the `stable` pin are in [releases.md](releases.md).
 
-## Bump PRs (specs.lock)
+## Bump PRs (specs.lock, mise pins)
 
-`specs-bump.yml` opens the weekly PR with the job token, so GitHub treats `github-actions[bot]` as its author. The required check is the PR's own `pull_request` run of `Marketplace validation`; nothing dispatches it by hand.
+`specs-bump.yml` opens the weekly PR with the job token, so GitHub treats `github-actions[bot]` as its author. `mise-bump.yml` does the same for the mise pins (`mise.toml`, `mise.lock`, `.mise/locks/`): a monthly PR from `mise-bump/<date>` and a weekly security PR from `mise-security/<date>`, at most one open per kind. A manual run (the workflow's `kind` input: `version` or `security`) uses the same path. The required check is the PR's own `pull_request` run of `Marketplace validation`; nothing dispatches it by hand.
 
 - **First PR:** the repository's approval policy ('Require approval for first-time contributors') holds that run until a maintainer clicks 'Approve and run'; the merge box says 'Some checks are waiting for approval'. Seen on the first bump PR (session 22). A `workflow_dispatch` run on the branch does not clear it: a held run counts as unfinished.
 - **Later PRs:** by the wording of that setting the hold ends once the bot has a PR merged here. The first bump PR was merged on 2026-11-17; the next one shows whether that holds. If it is held again, approving stays a weekly click.
