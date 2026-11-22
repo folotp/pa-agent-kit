@@ -94,6 +94,16 @@ class TagReleaseTests(unittest.TestCase):
         self.assertIn("would push alpha/v1.1.0", out)
         self.assertEqual(self.remote_tags(), [])
 
+    def test_refuses_when_the_approved_bump_commit_changed(self):
+        approved = git(self.repo, "rev-parse", "HEAD")
+        self.write("alpha", "1.1.0")
+        bump = self.merge("bump alpha")
+        status, out = self.run_main("alpha", "--expect-commit", approved)
+        self.assertEqual(status, 1)
+        self.assertIn(bump, out)
+        self.assertEqual(self.remote_tags(), [])
+        self.assertEqual(self.run_main("alpha", "--expect-commit", bump)[0], 0)
+
     def test_refuses_a_tag_that_exists_on_the_remote(self):
         self.write("alpha", "1.1.0")
         self.merge("bump alpha")

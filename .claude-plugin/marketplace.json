@@ -30,9 +30,9 @@
     {
       "name": "pa-toolkit",
       "source": "./plugins/pa-toolkit",
-      "description": "PA's personal toolkit — decision-gatekeeper agent (triages a proposed change against a domain's decision records, driven by governance profiles in the Organon vault), six fin-* PocketSmith/Rogers skills, and a generalized plugin-release runbook for all of PA's plugins.",
+      "description": "PA's personal toolkit — decision-gatekeeper agent (triages a proposed change against a domain's decision records, driven by governance profiles in the Organon vault) and six PocketSmith and Rogers skills.",
       "category": "productivity",
-      "tags": ["decision-records", "governance", "organon", "finance", "pocketsmith", "plugin-release"]
+      "tags": ["decision-records", "governance", "organon", "finance", "pocketsmith"]
     }
   ]
 }

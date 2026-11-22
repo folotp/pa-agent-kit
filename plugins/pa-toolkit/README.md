@@ -21,7 +21,6 @@ Pierre-André's personal Claude plugin for Claude Code and Cowork. It holds cros
 
   **Transparency.** A subagent's reply goes only to the session that called it. So the calling session must tell PA it is consulting the gatekeeper and show the output block verbatim. The agent's description and the FIN profile both say so. The block always starts with `decision-gatekeeper — <prefix>`.
 
-- **`plugin-release-executor`** (sonnet): the release runbook, dispatched only by the `plugin-release` skill.
 
 ### Skills
 
@@ -33,7 +32,6 @@ Pierre-André's personal Claude plugin for Claude Code and Cowork. It holds cros
 | `fin-pocketsmith-categorize-rogers` | description-triggered | Split Rogers wireless charges per line from the invoice |
 | `fin-pocketsmith-manage-vacation` | description-triggered | Full vacation lifecycle in PocketSmith (label, categorization, close, Alimentation prorata) |
 | `fin-rogers-download-invoice` | description-triggered | Download and archive Rogers invoice PDFs |
-| `plugin-release` | user-only: `/pa-toolkit:plugin-release` | Release any of PA's plugins (see below) |
 
 The `fin-*` skills were migrated verbatim from PA's account skills. Their MCP tool names are unprefixed. Several depend on Cowork-only tools and will not run in Claude Code:
 - `fin-rogers-download-invoice`: `device_bash`, the `~/mnt` mount;
@@ -64,27 +62,9 @@ Write a section titled « Profil de gouvernance des décisions » in that domain
 
 No change to this repo is needed.
 
-## Releasing (any of PA's plugins)
+## Releases
 
-`/pa-toolkit:plugin-release [patch|minor|major|none] [repo-path] [--dry-run]`
-uses the agent-neutral [shared release runbook](skills/plugin-release/references/runbook.md).
-Claude dispatches a thin executor; other agents follow the same runbook directly.
-The generic driver selects a target repository extension (or tracked-HEAD fallback),
-runs mandatory checks and verifies a real temporary archive. Its explicit JSON receipt
-carries the retained archive path; dry-runs return a null archive.
-
-For this repository, `config/release.json` runs the full shared development gate once,
-then builds only the reviewed runtime inventory. Publishing separately requires the
-exact release commit already merged to remote main, tag availability and authorization.
-Marketplace changes follow their own PR workflow.
-
-Safeguards:
-- run a dry-run first;
-- never reuse a tag;
-- never commit the `.plugin`;
-- no `--no-verify`.
-
-Releases come from the workshop: after a version bump merges, PA tags `pa-toolkit/v<version>` and the workshop's `release.yml` drafts the release with the `.plugin` and per-skill zips (`docs/releases.md` of the workshop). No notification workflow or dispatch token is involved.
+From the workshop use `/dev-plugin-release pa-toolkit`. For release steps see the [workshop release guide](../../docs/releases.md).
 
 ## Development
 
@@ -99,11 +79,10 @@ repository's `scripts/dev`, `release-checks.yml` and `docs/` did not move with i
 
 ```
 .claude-plugin/plugin.json      version source of truth (semver)
-agents/                         decision-gatekeeper, plugin-release-executor
+agents/                         decision-gatekeeper
 skills/fin-*/SKILL.md           six finance skills
-skills/plugin-release/          shared release driver, packager, runbook and Claude shim
-config/                        toolchain, runtime inventory and release extension (source only)
-tests/                         release driver and branch-guard tests (source only)
+config/                        runtime inventory and development fixtures
+tests/                         development tests
 ```
 
 Tracked in Organon as SD-BL-0066.

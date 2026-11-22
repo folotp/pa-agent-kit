@@ -21,8 +21,8 @@ What it does, in order, and where it stops:
      before the push and changes nothing.
 
 It tags the bump commit itself, not `main`'s tip, so another plugin's merge in between
-cannot move the tag. It never publishes: after the workflow drafts the release, check the
-assets and publish by hand (`gh release edit <tag> --draft=false`). A published release and
+cannot move the tag. It never publishes: after the workflow drafts the release, use
+/dev-plugin-release to check the assets and prepare publication by release ID. A published release and
 its tag are permanent (release immutability), so the dry run is worth reading.
 
 Exit status: 0 tagged (or dry run ok), 1 refused or failed. Stdlib only.
@@ -47,6 +47,10 @@ git = release_plugins.git
 version_at = release_plugins.version_at
 
 
+class BumpRequired(ValueError):
+    """The current manifest version has no taggable bump at the latest plugin change."""
+
+
 def plan_tag(repo: Path, plugin: str, rev: str, remote_tags: set[str]) -> tuple[str, str]:
     """Return (tag, commit) for the plugin's version at `rev`, or raise ValueError.
 
@@ -67,7 +71,7 @@ def plan_tag(repo: Path, plugin: str, rev: str, remote_tags: set[str]) -> tuple[
     if not commit:
         raise ValueError(f"no commit on {rev} touches {path}")
     if version_at(repo, commit, path) == version_at(repo, f"{commit}^", path):
-        raise ValueError(
+        raise BumpRequired(
             f"the latest commit touching {path} ({commit[:12]}) did not change its version "
             f"({version}): bump the version in a PR and merge it before tagging")
     # Same rules as the workflow: manifest listing, semver, version at the commit, and a
@@ -94,10 +98,13 @@ def main(argv: list[str] | None = None, repo: Path = REPO_ROOT) -> int:
     parser.add_argument("plugin", help="plugin name, as listed in the marketplace manifest")
     parser.add_argument("--remote", default="origin", help="remote holding main (default origin)")
     parser.add_argument("--dry-run", action="store_true", help="print the tag and commit; push nothing")
+    parser.add_argument("--expect-commit", help="refuse if the bump differs from the approved full commit SHA")
     args = parser.parse_args(argv)
     try:
         git("fetch", "--quiet", "--tags", args.remote, repo=repo)
         tag, commit = plan_tag(repo, args.plugin, f"{args.remote}/main", remote_tag_names(repo, args.remote))
+        if args.expect_commit and commit != args.expect_commit:
+            raise ValueError(f"the approved bump was {args.expect_commit}, but the current bump is {commit}")
         print(f"tag-release: {'would push' if args.dry_run else 'pushing'} {tag} on {commit[:12]}: "
               f"{git('log', '-1', '--format=%s', commit, repo=repo).strip()}")
         if not args.dry_run:

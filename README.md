@@ -20,11 +20,11 @@ Codex: `codex plugin marketplace add folotp/pa-agent-kit`, then `codex plugin ad
 | [`projectionlab`](plugins/projectionlab/) | 0.1.0 | in-repo | Read-only access to ProjectionLab financial plans via the Chrome MCP. |
 | [`session-telemetry`](plugins/session-telemetry/) | 0.2.1 | in-repo | Captures a structured snapshot of the current Claude session and appends one NDJSON line to the Organon vault telemetry log via Organon MCP. |
 | [`organon`](plugins/organon/) | 1.5.6 | in-repo | Organon vault conventions for Claude — 8 description-triggered skills covering read and write discipline, frontmatter, markdown style, session discipline, Bases, JSON Canvas, and diagramming. |
-| [`pa-toolkit`](plugins/pa-toolkit/) | 0.2.0 | in-repo | PA's personal toolkit — decision-gatekeeper agent (triages a proposed change against a domain's decision records, driven by governance profiles in the Organon vault), six fin-* PocketSmith/Rogers skills, and a generalized plugin-release runbook for all of PA's plugins. |
+| [`pa-toolkit`](plugins/pa-toolkit/) | 0.3.0 | in-repo | PA's personal toolkit — decision-gatekeeper agent (triages a proposed change against a domain's decision records, driven by governance profiles in the Organon vault) and six PocketSmith and Rogers skills. |
 
 ## Plugin sources
 
-Every plugin lives under `plugins/<name>/` of this repository, and both manifests list it by relative path: `"source": "./plugins/<name>"` for Claude Code, `{"source": "local", "path": "./plugins/<name>"}` for Codex. The version lives in the plugin's `plugin.json`; bump it on each meaningful change so users get an Update notification (`/bump-plugin <name> <version>`).
+Every plugin lives under `plugins/<name>/` of this repository, and both manifests list it by relative path: `"source": "./plugins/<name>"` for Claude Code, `{"source": "local", "path": "./plugins/<name>"}` for Codex. The version lives in the plugin's `plugin.json`; bump it on each meaningful change so users get an Update notification (`/dev-plugin-release <name> <patch|minor|major>`).
 
 **Single source of truth for version.** Per the [official docs](https://code.claude.com/docs/en/plugin-marketplaces#version-resolution-and-release-channels), Claude Code resolves a plugin's version from the first of these set: `version` in `plugin.json` -> `version` in the marketplace entry -> the source's commit SHA. **Don't set `version` in both `plugin.json` and the marketplace entry** — `plugin.json` always wins silently, so a stale duplicate can mask a real bump. This marketplace keeps `version` in `plugin.json` only.
 
@@ -54,11 +54,10 @@ Skills, commands, agents, and hooks are auto-discovered from their conventional 
 
 ## Adding a new plugin
 
-1. Create `plugins/<name>/` with at minimum a `skills/<name>/SKILL.md` (or commands/agents/hooks).
-2. Create `plugins/<name>/.claude-plugin/plugin.json` with `name`, `version`, `description`, `author`. **The `version` here drives Update detection — bump it on every meaningful change.**
-3. Add an entry to `.claude-plugin/marketplace.json` under `plugins[]` with `name`, `source: "./plugins/<name>"`, `description`, `category`, `tags`. Do **not** duplicate `version` here.
-4. Use `/bump-plugin <name> <version>` to bump on each release (updates `plugin.json` and the README plugins table).
-5. Open a PR; merge it. Re-installation: `/plugin marketplace update pa-marketplace` then `/plugin install <name>@pa-marketplace`.
+Run `/dev-help` in the workshop to find the available commands. Use
+`/dev-plugin-create <name>` to scaffold the plugin on a feature worktree,
+then complete its component stub and open a PR. Use the release procedure
+to tag and publish after the PR merges. [Workshop release guide](docs/releases.md).
 
 ## License
 
