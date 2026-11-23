@@ -7,7 +7,7 @@ profile = "plugin"
 check = "python3 -B tools/specs/specs.py check"
 
 # Commands that must resolve under mise (names as found on PATH, not mise tool names).
-tools = ["python3", "shellcheck", "actionlint"]
+tools = ["python3", "shellcheck", "actionlint", "jq", "ruby"]
 
 # Run in order by `./dev ci`, from the repository root, each through `bash -c`.
 [checks]
