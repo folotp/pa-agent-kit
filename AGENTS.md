@@ -37,7 +37,7 @@ Use `/dev-help` for the workshop command index. Use `./dev ci` for automation ch
 
 ### Validation
 
-- Run `python3 scripts/validate-marketplace.py` before any `marketplace.json` or `README.md` commit (no network needed).
+- Run `./dev x python3 scripts/validate-marketplace.py` before any `marketplace.json` or `README.md` commit (no network needed).
 - No JSON reformat on targeted edits; `tags` arrays stay compact on a single line.
 
 ### Authorization
