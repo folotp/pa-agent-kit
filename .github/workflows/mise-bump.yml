@@ -239,6 +239,10 @@ jobs:
             echo
             cat "$RUNNER_TEMP/mise-binary.md"
             echo
-            echo "The new lock installs (\`./dev setup\` ran from it, which ends with \`./dev check\`). \`./dev ci\` has not run on the new tools yet: read this PR's own required check before merging; if it shows as waiting for approval, a maintainer approves it. A person merges."
+            echo "Done by the job: the new lock installs (\`./dev setup\` ran from it, which ends with \`./dev check\`). \`./dev ci\` has not run on the new tools yet; it runs as this PR's own required check."
+            echo
+            echo "Left for PA: read that check, then merge; the job never merges. If the check shows as waiting for approval, approving the run on GitHub is a step with no \`/dev-\` command yet (a candidate for one)."
+            echo
+            echo "Next step: merge this PR once its required check passes (merging has no \`/dev-\` command: a candidate for one)."
           } > "$RUNNER_TEMP/body.md"
           gh pr create --base "$DEFAULT_BRANCH" --head "$branch" --title "$COMMIT_PREFIX: $subject ($(date -u +%Y-%m-%d))" --body-file "$RUNNER_TEMP/body.md"

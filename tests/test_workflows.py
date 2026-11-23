@@ -253,6 +253,18 @@ class MiseBumpTemplateTest(unittest.TestCase):
         self.assertNotIn("checks passed", last)
         self.assertNotIn("./dev ci", [s for s in self.steps if s.startswith("Install from the new lock")][0].split("run:")[1])
 
+    def test_the_pr_body_ends_with_the_handoff_of_agents_md(self):
+        # The shared block of AGENTS.md: what happened, what is left for PA, one exact next step,
+        # and a step with no /dev- command is reported as a candidate (Codex review, network-config PR 34).
+        last = self.steps[-1]
+        body = last[last.index("Done by the job:"):last.index('} > "$RUNNER_TEMP/body.md"')]
+        self.assertLess(body.index("Done by the job:"), body.index("Left for PA:"))
+        self.assertLess(body.index("Left for PA:"), body.index("Next step:"))
+        self.assertIn("a candidate for one", body)
+        self.assertEqual(body.count("Next step:"), 1)
+        # The merge has no /dev- command either: the final instruction carries the qualification.
+        self.assertRegex(body[body.index("Next step:"):], r"merge this PR[^\n]*a candidate for one")
+
     def test_nothing_is_downloaded_into_the_checkout(self):
         # The job stages the whole tree (`git add -A`) and then allows three paths: a binary left
         # in the repository root would fail every run before the push (Codex review of PR 107).
