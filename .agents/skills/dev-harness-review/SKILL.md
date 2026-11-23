@@ -4,7 +4,7 @@ description: Review workshop harness pins, agent releases and workaround probes 
 argument-hint: '[--dry-run]'
 ---
 
-Run `python3 -B tools/workshop/harness_review.py` from the workshop checkout on the Mac. Pass `--dry-run` for a list of probes and stop after relaying the last three lines. If the workshop check fails, use its diagnostic as the first finding and stop.
+Run `./dev x python3 -B tools/workshop/harness_review.py` from the workshop checkout on the Mac. Pass `--dry-run` for a list of probes and stop after relaying the last three lines. If the workshop check fails, use its diagnostic as the first finding and stop.
 
 For a full review, use the script's versions and probe results with `mise.toml`, `mise.lock`, `specs.lock` and `docs/workaround-register.md`. Read the latest specs bump PR and public agent release notes since the versions in the register. Review core size and duplication, client hook bindings, pinned Actions, and the consumer versions relative to the latest core tag. Does GitHub's Dependabot supported-ecosystems page list mise as generally available (not beta)? If so, propose replacing the mise-bump job with a `mise` entry in `dependabot.yml`. Report unread sources and inconclusive probes.
 

@@ -169,6 +169,8 @@ Checked 2026-11-17 in a cloud session on this repository:
 
 Cloud recipe: install mise with its official installer, then `./dev setup`.
 
+`scripts/cloud-env-setup.sh` does both: it installs the Linux x64 mise release named by its `MISE_VERSION` and checks it against `MISE_SHA256` (the same pin as the workflows), trusts `mise.toml`, runs `./dev setup` through an isolated `PATH` and installs the platform `jq` the guard needs before mise exists. Pasted into a cloud environment's setup script it runs before checkout and defers the repository steps; run again after checkout it installs the locked tools. A pasted copy must be refreshed to pick up a changed script. The pin in this script moves with the workflows' (a person changes all of them; the mise-bump job only reports a newer release).
+
 ## Gate: what the two step-0 wrappers share
 
 Session 20 compared the gates of `network-config` (`./dev apply`, Terraform) and `ha-config` (`./dev deploy`, SSH to the host), both at `origin/main` with sessions 04b and 13c merged. Both were written as one design, so most of the code is the same line for line.

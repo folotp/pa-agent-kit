@@ -12,7 +12,7 @@ Use /dev-help to find the workshop release command. Run `/dev-plugin-release <pl
 
 Draft read-back uses the bot's normal token and the releases list or release ID. The `--read-only` token cannot see drafts. Use the release ID or list for drafts because the tag lookup endpoints, including `gh release view <tag>`, can omit them. [GitHub REST release endpoints](https://docs.github.com/en/rest/releases/releases#list-releases).
 
-For a local preview, run `python3 scripts/release-plugins.py --base <commit> --head <branch>` to list tags, or `python3 scripts/release-plugins.py --tag <plugin>/v<version> --head <commit> --dry-run` to check a tag. The workflow's manual Preview job is available under Actions. For the owner-token procedure use `/dev-run-with-owner-token`.
+For a local preview, run `./dev x python3 scripts/release-plugins.py --base <commit> --head <branch>` to list tags, or `./dev x python3 scripts/release-plugins.py --tag <plugin>/v<version> --head <commit> --dry-run` to check a tag. The workflow's manual Preview job is available under Actions. For the owner-token procedure use `/dev-run-with-owner-token`.
 
 The `release` job is the only one with a write token, and it refuses before its script runs (session 24b, K8, and the Codex second read, C1; reshaped in session 25):
 
@@ -28,7 +28,7 @@ The zip carries a plugin's payload with the plugin root at the archive root; it 
 
 The Gemini app accepts skills, not plugins (tested 2026-11-17: it refused a `.plugin`), so the release also gets one `<skill>.zip` per skill, with `SKILL.md` at the zip root. Build them with `--skills`.
 
-Build locally, any plugin and revision: `python3 scripts/plugin_zip.py --ref HEAD --out dist --list organon` (no names builds all four). If the upload step fails in a release run, the draft stays without some or all of its assets: rerun the failed job (the draft is reused and its assets replaced), or build the zips with the command above at the tagged commit and `gh release upload --clobber <tag> <file>`. Design and recovery notes: [protected-main.md](protected-main.md).
+Build locally, any plugin and revision: `./dev x python3 scripts/plugin_zip.py --ref HEAD --out dist --list organon` (no names builds all four). If the upload step fails in a release run, the draft stays without some or all of its assets: rerun the failed job (the draft is reused and its assets replaced), or build the zips with the command above at the tagged commit and `gh release upload --clobber <tag> <file>`. Design and recovery notes: [protected-main.md](protected-main.md).
 
 ## Pin your own installs to `stable`
 

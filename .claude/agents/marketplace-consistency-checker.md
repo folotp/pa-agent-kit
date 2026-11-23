@@ -12,7 +12,7 @@ Your job is to verify that all manifest files agree with each other, with the fi
 
 Run all of these against the repo root (`${CLAUDE_PROJECT_DIR}` or `pwd`):
 
-1. **Marketplace manifest is valid JSON.** `python3 -m json.tool .claude-plugin/marketplace.json`. If this fails, stop and report — every other check depends on it.
+1. **Marketplace manifest is valid JSON.** `./dev x python3 -m json.tool .claude-plugin/marketplace.json`. If this fails, stop and report — every other check depends on it.
 
 2. **Every in-repo `plugin.json` is valid JSON.** Glob `plugins/*/.claude-plugin/plugin.json` and validate each.
 
