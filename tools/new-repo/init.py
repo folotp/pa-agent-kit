@@ -16,6 +16,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sync import sync
 
+import settings
+
 HERE = Path(__file__).resolve().parent
 WORKSHOP = sync.WORKSHOP
 TAG = re.compile(r"harness-v(\d+)\.(\d+)")
@@ -196,7 +198,13 @@ def run(argv=None):
         "--defer-hooks", action="store_true",
         help="prepare files before the owner creates main, then rerun without this option",
     )
+    parser.add_argument("--apply-settings", action="store_true", help="apply GitHub settings before the initial push")
+    parser.add_argument("--yes", action="store_true", help="confirm the owner approved the settings write")
     args = parser.parse_args(argv)
+    if args.apply_settings and not args.dry_run and not (args.defer_hooks and args.yes):
+        parser.error("--apply-settings requires --defer-hooks and explicit owner approval (--yes)")
+    if args.apply_settings and not args.dry_run and not os.environ.get("GH_TOKEN"):
+        raise InitError("Run --apply-settings through the owner token command in your own terminal.")
     target = args.checkout.resolve()
     owner, name = repository(target)
     tag, commit = select_release(args.tag)
@@ -211,6 +219,7 @@ def run(argv=None):
             print(f"  Install {path} if absent.")
         print("  Defer hook activation until after the owner's initial push." if args.defer_hooks
               else "  Run ./dev setup to install locked tools and activate hooks.")
+        settings.dry_plan(f"{owner}/{name}", args.profile, baseline, apply=True, handoff=False)
         print("done: plan printed")
         print("left for PA: perform the initial workflow push with the owner token")
         print("next: rerun without --dry-run when ready")
@@ -223,6 +232,10 @@ def run(argv=None):
     if not args.defer_hooks:
         command = "check" if active_hooks == CORE_HOOKS else "setup"
         subprocess.run(["./dev", command], cwd=target, check=True)
+    if args.apply_settings:
+        result = settings.run(["apply", f"{owner}/{name}", "--profile", args.profile, "--planned-mise-bump", "--yes"])
+        if result:
+            return result
     print(f"done: {tag} prepared; {count} new files or links")
     if args.defer_hooks:
         print("left for PA: approve the owner-token push of the initial workflow commit")
@@ -236,6 +249,6 @@ def run(argv=None):
 if __name__ == "__main__":
     try:
         sys.exit(run())
-    except (InitError, sync.SyncError, OSError, subprocess.CalledProcessError) as error:
+    except (InitError, settings.SettingsError, sync.SyncError, OSError, subprocess.CalledProcessError) as error:
         print(f"init: {error}", file=sys.stderr)
         sys.exit(1)
