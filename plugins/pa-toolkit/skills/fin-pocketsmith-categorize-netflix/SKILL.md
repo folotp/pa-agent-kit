@@ -1,6 +1,7 @@
 ---
 name: fin-pocketsmith-categorize-netflix
 description: "Sépare la transaction mensuelle Netflix dans PocketSmith en trois montants fixes (part de PA vers Contenu TV & musique, part d'André vers Avances - André, part d'Océane vers Avances - Océane), revue avec PA avant écriture. Trigger sur toute mention de Netflix dans PocketSmith, catégorisation ou split de la facture Netflix."
+compatibility: "Nécessite les outils PocketSmith et l’accès au compte configuré."
 ---
 
 # Netflix → PocketSmith categorization

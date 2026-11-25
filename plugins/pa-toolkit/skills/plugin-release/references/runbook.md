@@ -2,6 +2,21 @@
 
 Agent-neutral source of the release procedure. Publishing requires explicit user authorization; implementation/testing authorizes dry-runs only. Follow these steps in order and stop on failure.
 
+## Contents
+
+- [Resolve identity](#0-resolve-identity-read-only)
+- [Pre-flight](#1-pre-flight-all-modes)
+- [Dry run](#2-dry-run-stops-here)
+- [Version bump](#3-version-bump-skip-when-bump--none)
+- [Build](#4-build)
+- [Tag and push](#5-tag-and-push-main-first)
+- [GitHub Release](#6-github-release)
+- [Marketplace](#7-marketplace-folotppa-marketplace)
+- [Report](#report)
+- [Anti-patterns](#anti-patterns)
+- [Release notes](#release-notes)
+- [Repository extension contract](#repository-extension-contract)
+
 ## 0. Resolve identity (read-only)
 
 ```bash

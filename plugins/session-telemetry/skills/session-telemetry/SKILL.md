@@ -1,6 +1,7 @@
 ---
 name: session-telemetry
 description: Append a structured snapshot of the current Claude session (context, tokens, tools, MCP, skills, errors) as a single NDJSON line to the Organon vault telemetry log. Use when the user runs /session-stats, /telemetry, or asks to "log this session", "capture session stats", "record telemetry", "snapshot this session". Do NOT trigger on generic "stats", "metrics", or "analytics" requests unrelated to Claude sessions.
+compatibility: "Requires Claude Code or Cowork and the Organon MCP connector with append access to the telemetry note."
 ---
 
 # session-telemetry

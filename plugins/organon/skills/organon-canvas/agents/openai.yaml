@@ -1,0 +1,3 @@
+interface:
+  display_name: "Organon · Map notes on a canvas"
+  short_description: "Build JSON Canvas maps of vault notes"

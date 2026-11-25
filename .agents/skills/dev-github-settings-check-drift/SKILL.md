@@ -3,6 +3,7 @@ name: dev-github-settings-check-drift
 description: Read GitHub repository settings against the workshop baseline and list browser checks with their pages and expected values.
 argument-hint: '<owner/repo> --profile <plain|live> [--dry-run]'
 disable-model-invocation: true
+compatibility: "Requires the workshop checkout, GitHub CLI, and the workshop bot for repository reads."
 ---
 
 Use the workshop checkout. Collect the repository and its profile. If its CI check name differs from the starter, include the repository's existing check name as `--required-check "<name>"`.

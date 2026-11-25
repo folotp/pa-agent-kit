@@ -1,9 +1,1 @@
-{
-  "name": "projectionlab",
-  "version": "0.1.0",
-  "description": "Read-only access to ProjectionLab financial plans via the Chrome MCP.",
-  "author": {
-    "name": "Pierre-André",
-    "email": "pierreandre@folot.net"
-  }
-}
+../plugin.json

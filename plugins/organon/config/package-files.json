@@ -6,6 +6,7 @@
   "commands",
   "assets",
   "README.md",
+  "CHANGELOG.md",
   "LICENSE",
   "kepano-version.txt",
   "scripts/kepano-check-upstream.sh",

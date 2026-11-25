@@ -1,6 +1,7 @@
 ---
 name: projectionlab
 description: "Read financial projection data from ProjectionLab (app.projectionlab.com) via Chrome. Use this skill whenever the user mentions ProjectionLab, PL, financial projections, retirement plans, or wants to review/extract/validate data from their ProjectionLab plans — including plan settings, milestones, income, expenses, accounts, withdrawal strategies, growth rates, inflation, tax settings, drawdown order, Monte Carlo results, or current finances. Also trigger when the user wants to compare ProjectionLab assumptions against other documents, export PL data, or do a cross-check of projection inputs. Even if the user just says 'check my plan' or 'what are my projection assumptions', this skill should trigger if ProjectionLab is their projection tool."
+compatibility: "Requires Claude in Chrome with access to a signed-in ProjectionLab session."
 ---
 
 # ProjectionLab Data Access Skill

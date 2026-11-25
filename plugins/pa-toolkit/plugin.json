@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "pa-toolkit",
+  "version": "0.3.1",
+  "description": "Pierre-André's personal Claude toolkit (Code + Cowork). decision-gatekeeper: a read-only, domain-agnostic agent that triages a proposed change against a domain's decision records (covered / new / supersede / other note type / operational), driven by the \"Profil de gouvernance des décisions\" it reads from the Organon vault on every call. Six fin-* skills for PocketSmith categorization, vacation management and Rogers invoices. No bundled .mcp.json — uses the Organon MCP each surface already provides.",
+  "homepage": "https://github.com/folotp/pa-agent-kit/tree/main/plugins/pa-toolkit",
+  "repository": "https://github.com/folotp/pa-agent-kit",
+  "author": {
+    "name": "Pierre-André Folot",
+    "url": "https://github.com/folotp"
+  },
+  "keywords": [
+    "personal",
+    "decision-records",
+    "adr",
+    "governance",
+    "organon",
+    "finance",
+    "pocketsmith"
+  ],
+  "license": "MIT"
+}

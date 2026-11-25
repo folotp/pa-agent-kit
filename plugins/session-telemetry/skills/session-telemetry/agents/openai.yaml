@@ -1,0 +1,3 @@
+interface:
+  display_name: "PA Session Telemetry · Capture session telemetry"
+  short_description: "Append a Claude session snapshot to Organon"

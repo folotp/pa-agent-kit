@@ -1,0 +1,3 @@
+interface:
+  display_name: "PA Toolkit · Split Rogers charges"
+  short_description: "Review invoice-based Rogers splits in PocketSmith"

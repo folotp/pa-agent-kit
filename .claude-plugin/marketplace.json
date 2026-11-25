@@ -3,11 +3,14 @@
   "description": "PA's Marketplace: plugins for AI agents.",
   "owner": {
     "name": "Pierre-André",
-    "email": "pierreandre@folot.net"
+    "email": "pierreandre@folot.net",
+    "url": "https://github.com/folotp"
   },
   "plugins": [
     {
       "name": "projectionlab",
+      "displayName": "ProjectionLab",
+      "metadata": {"public": false},
       "source": "./plugins/projectionlab",
       "description": "Read-only access to ProjectionLab financial plans via the Chrome MCP. Extracts plan settings, milestones, income, expenses, accounts, withdrawal strategies, and Monte Carlo results from the Pinia stores.",
       "category": "personal-finance",
@@ -15,6 +18,8 @@
     },
     {
       "name": "session-telemetry",
+      "displayName": "Session Telemetry",
+      "metadata": {"public": false},
       "source": "./plugins/session-telemetry",
       "description": "Captures a structured snapshot of the current Claude session (context, tokens, tools, MCP, skills, errors) and appends one NDJSON line to the Organon vault telemetry log via Organon MCP.",
       "category": "productivity",
@@ -22,6 +27,8 @@
     },
     {
       "name": "organon",
+      "displayName": "Organon",
+      "metadata": {"public": false},
       "source": "./plugins/organon",
       "description": "Organon vault conventions for Claude — 8 description-triggered skills covering MCP read and write discipline, frontmatter schema, body markdown style, session discipline, Bases views, JSON Canvas cartography, and Mermaid/Excalidraw diagramming. Absorbs kepano obsidian-skills content verbatim (drift-tracked) — no runtime cascade required.",
       "category": "knowledge-management",
@@ -29,6 +36,8 @@
     },
     {
       "name": "pa-toolkit",
+      "displayName": "PA Toolkit",
+      "metadata": {"public": false},
       "source": "./plugins/pa-toolkit",
       "description": "PA's personal toolkit — decision-gatekeeper agent (triages a proposed change against a domain's decision records, driven by governance profiles in the Organon vault) and six PocketSmith and Rogers skills.",
       "category": "productivity",

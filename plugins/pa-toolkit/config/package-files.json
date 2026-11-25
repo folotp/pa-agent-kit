@@ -1,12 +1,21 @@
 [
+  "plugin.json",
   ".claude-plugin/plugin.json",
   "README.md",
+  "CHANGELOG.md",
+  "LICENSE",
   "AGENTS.md",
   "agents/decision-gatekeeper.md",
   "skills/fin-pocketsmith-categorize-amazon/SKILL.md",
+  "skills/fin-pocketsmith-categorize-amazon/agents/openai.yaml",
   "skills/fin-pocketsmith-categorize-apple/SKILL.md",
+  "skills/fin-pocketsmith-categorize-apple/agents/openai.yaml",
   "skills/fin-pocketsmith-categorize-netflix/SKILL.md",
+  "skills/fin-pocketsmith-categorize-netflix/agents/openai.yaml",
   "skills/fin-pocketsmith-categorize-rogers/SKILL.md",
+  "skills/fin-pocketsmith-categorize-rogers/agents/openai.yaml",
   "skills/fin-pocketsmith-manage-vacation/SKILL.md",
-  "skills/fin-rogers-download-invoice/SKILL.md"
+  "skills/fin-pocketsmith-manage-vacation/agents/openai.yaml",
+  "skills/fin-rogers-download-invoice/SKILL.md",
+  "skills/fin-rogers-download-invoice/agents/openai.yaml"
 ]

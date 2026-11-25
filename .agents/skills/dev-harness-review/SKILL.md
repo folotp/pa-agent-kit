@@ -2,6 +2,7 @@
 name: dev-harness-review
 description: Review workshop harness pins, agent releases and workaround probes when the twice-yearly review is due or PA asks for it.
 argument-hint: '[--dry-run]'
+compatibility: "Requires the workshop checkout and its pinned tools on macOS. Full review needs network access."
 ---
 
 Run `./dev x python3 -B tools/workshop/harness_review.py` from the workshop checkout on the Mac. Pass `--dry-run` for a list of probes and stop after relaying the last three lines. If the workshop check fails, use its diagnostic as the first finding and stop.

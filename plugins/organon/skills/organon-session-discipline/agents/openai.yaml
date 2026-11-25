@@ -1,0 +1,3 @@
+interface:
+  display_name: "Organon · Start a vault session"
+  short_description: "Read the bootstrap and apply vault rules"

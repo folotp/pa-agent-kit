@@ -2,9 +2,30 @@
 
 Organon vault conventions for AI agents — packaged as a portable plugin of [Agent Skills](https://agentskills.io/specification) for Claude, ChatGPT and Gemini.
 
+## Install
+
+In Claude Code:
+
+```text
+/plugin marketplace add folotp/pa-agent-kit
+/plugin install organon@pa-marketplace
+/reload-plugins
+```
+
+In Codex:
+
+```text
+codex plugin marketplace add folotp/pa-agent-kit
+codex plugin add organon@pa-marketplace
+```
+
+Connect the Organon MCP connector in the client you use. Cowork also supports installing the packaged plugin from a workshop release.
+
+See the [changelog](CHANGELOG.md) and [workshop releases](https://github.com/folotp/pa-agent-kit/releases).
+
 ## Development
 
-Start with [the shared development workflow](docs/development.md) and `AGENTS.md`. Claude Code, Codex, other agents, and humans use the same checks. Release packaging follows [the release runbook](docs/release.md). For implementation ownership, CI flow and safe modification procedures, read [the maintainer architecture](https://github.com/folotp/organon-plugin/blob/main/docs/development-architecture.md).
+Start with [the shared development workflow](docs/development.md) and `AGENTS.md`. Claude Code, Codex, other agents, and humans use the same checks. Release packaging follows [the release runbook](docs/release.md). For implementation ownership, CI flow and safe modification procedures, read [the maintainer architecture](docs/development-architecture.md).
 
 ## What this plugin provides
 
@@ -26,7 +47,7 @@ Eight description-triggered skills (load automatically when working with the Org
 
 ### Claude-only command (`disable-model-invocation: true`)
 
-Releases moved out of this plugin: they are cut with `/pa-toolkit:plugin-release` from [`folotp/pa-toolkit`](https://github.com/folotp/pa-toolkit), the single generalized release runbook for all of PA's plugins (it was `/plugin-release` here from v0.4.1).
+Maintainers prepare releases with `/dev-plugin-release organon` from the workshop.
 
 - **organon-memory-audit** (`/organon-memory-audit`, since v0.5.0) — Three-pole drift audit aligning plugin/skill/tool reality, the canonical-snippets vault note, and per-surface implementations (Code / Cowork / Chat). Optional instruction-quality checks (`--checks=drift|quality|all`) cover orientation files, progressive disclosure in `organon-*` skills, and rule quality for Claude-5-generation models. Two scope modes (`--scope=global|project|all`) and two interaction modes (`--mode=interactive|report-only`). Edits never auto-applied — findings are raised for per-item human-in-the-loop approval.
 
@@ -256,16 +277,6 @@ Historical record: each entry cites paths and components as they were at that re
   - `organon-memory-audit/SKILL.md` — surface-detection probe and `PLUGIN_ROOT` default switched from hard-coded `/Users/pierreandre/...` to `~` / `$HOME` (portable to remote Code agents and other macOS users). Integrity gate dropped `--no-fetch` (stale cache was defeating the gate) and rewrote the gate to distinguish drift (`rc=1` → recommends re-sync) from gate-unavailable (`rc≥2` → separate report-header note, doesn't block pole-3 reads).
 - Fixes the silent drift between plugin VOCABULARIES.md and vault registre that had accumulated since v0.4.0 (plugin had 9 `type:` values, vault had 16).
 - Breaking: no — additive. Existing skills unchanged in behavior; new references load on-demand.
-
-## Installation
-
-Claude Code:
-
-```
-/plugin install organon --marketplace folotp/claude-marketplace
-```
-
-Cowork: click "Install plugin" when this `.plugin` file appears in chat. The 8 description-triggered skills load automatically when working with the Organon vault; the Claude-only command `/organon-memory-audit` is invoked explicitly via slash command.
 
 ## Author
 

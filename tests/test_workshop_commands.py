@@ -79,10 +79,26 @@ class CreateTests(unittest.TestCase):
         (self.repo / "scripts/validate-marketplace.py").write_bytes(
             (ROOT / "scripts/validate-marketplace.py").read_bytes()
         )
-        (self.repo / ".agents/plugins/marketplace.json").write_text('{"plugins":[]}\n')
-        (self.repo / "plugins/example/plugin.json").write_text('{"name":"example","version":"0.1.0"}\n')
+        (self.repo / ".agents/plugins/marketplace.json").write_text(json.dumps({
+            "name": "workshop", "interface": {"displayName": "Test Workshop"}, "plugins": [],
+        }))
+        example = self.repo / "plugins/example"
+        (example / ".claude-plugin").mkdir()
+        (example / ".claude-plugin/plugin.json").symlink_to("../plugin.json")
+        (example / "plugin.json").write_text(json.dumps({
+            "$schema": plugins.PORTABLE_SCHEMA, "name": "example", "version": "0.1.0",
+            "description": "Existing plugin", "license": "MIT", "keywords": ["one", "two"],
+            "author": {"name": "Test Publisher", "url": "https://example.invalid/publisher"},
+            "homepage": "https://example.invalid/plugin", "repository": "https://example.invalid/repo",
+        }))
+        (example / "README.md").write_text("# Example\n")
+        (example / "CHANGELOG.md").write_text("# Changelog\n")
         self.marketplace.write_text(
-            '{\n  "plugins": [\n    {"name":"example","source":"./plugins/example","tags": ["one", "two"]}\n  ]\n}\n'
+            '{\n  "name": "workshop",\n  "description": "Test marketplace",\n'
+            '  "owner": {"name": "Test Publisher", "url": "https://example.invalid/publisher"},\n'
+            '  "plugins": [\n'
+            '    {"name":"example","source":"./plugins/example","description":"Existing plugin",'
+            '"category":"tools","tags": ["one", "two"]}\n  ]\n}\n'
         )
         (self.repo / "README.md").write_text("| [\x60example\x60](plugins/example/) | 0.1.0 | in-repo | Existing |\n")
         self.git("init", "-q", "-b", "main", repo=self.repo)
@@ -97,7 +113,10 @@ class CreateTests(unittest.TestCase):
 
     def test_dry_run_and_scaffold(self):
         args = SimpleNamespace(plugin="new-plugin", description='One "line" of text', category="tools",
-                               tags="one,two", version="0.1.0", component="skills", dry_run=True)
+                               tags="one,two", version="0.1.0", component="skills", dry_run=True,
+                               display_name="New Plugin", author_name="Test Publisher",
+                               author_url="https://example.invalid/publisher", license="MIT",
+                               compatibility="Requires access to the example connector.")
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             plugins.create_plugin(args, self.worktree)
@@ -112,7 +131,17 @@ class CreateTests(unittest.TestCase):
         entry = json.loads(marketplace)["plugins"][-1]
         self.assertEqual(entry["source"], "./plugins/new-plugin")
         self.assertNotIn("version", entry)
-        self.assertTrue((self.worktree / "plugins/new-plugin/skills/new-plugin/SKILL.md").is_file())
+        self.assertEqual(entry["displayName"], "New Plugin")
+        plugin_dir = self.worktree / "plugins/new-plugin"
+        self.assertTrue((plugin_dir / ".claude-plugin/plugin.json").samefile(plugin_dir / "plugin.json"))
+        manifest = json.loads((plugin_dir / "plugin.json").read_text())
+        self.assertEqual(manifest["$schema"], plugins.PORTABLE_SCHEMA)
+        self.assertEqual(manifest["author"]["url"], args.author_url)
+        self.assertEqual(manifest["keywords"], ["one", "two"])
+        self.assertIn("new-plugin@workshop", (plugin_dir / "README.md").read_text())
+        self.assertTrue((plugin_dir / "CHANGELOG.md").is_file())
+        skill = (plugin_dir / "skills/new-plugin/SKILL.md").read_text()
+        self.assertIn(f'compatibility: "{args.compatibility}"', skill)
         self.assertFalse((self.repo / "plugins/new-plugin").exists())
         with self.assertRaisesRegex(ValueError, "already exists"):
             plugins.create_plugin(args, self.worktree)

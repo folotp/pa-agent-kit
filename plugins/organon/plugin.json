@@ -1,12 +1,14 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "organon",
-  "version": "1.5.6",
+  "version": "1.5.7",
   "description": "Organon vault conventions for AI agents — 8 Agent Skills covering MCP read and write discipline (atomic frontmatter, partial reads, link-safe renames, in-process Dataview), frontmatter schema, body markdown style, session-discipline behavioral rules, Bases views, JSON Canvas cartography, and Mermaid/Excalidraw diagramming. Carries 9 kepano-adapted references pinned to one upstream sha (kepano-version.txt). Requires the Organon MCP connector; no bundled mcp.json. Claude surfaces also get subagents and the /organon-memory-audit command.",
+  "homepage": "https://github.com/folotp/pa-agent-kit/tree/main/plugins/organon",
   "author": {
-    "name": "Pierre-André Folot"
+    "name": "Pierre-André Folot",
+    "url": "https://github.com/folotp"
   },
-  "repository": "https://github.com/folotp/organon-plugin",
+  "repository": "https://github.com/folotp/pa-agent-kit",
   "license": "MIT",
   "keywords": [
     "obsidian",
@@ -24,5 +26,17 @@
     "diagramming",
     "mermaid",
     "excalidraw"
-  ]
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Organon",
+        "shortDescription": "Obsidian vault conventions",
+        "longDescription": "Organon vault conventions for AI agents — 8 Agent Skills covering MCP read and write discipline (atomic frontmatter, partial reads, link-safe renames, in-process Dataview), frontmatter schema, body markdown style, session-discipline behavioral rules, Bases views, JSON Canvas cartography, and Mermaid/Excalidraw diagramming. Carries 9 kepano-adapted references pinned to one upstream sha (kepano-version.txt). Requires the Organon MCP connector; no bundled mcp.json. Claude surfaces also get subagents and the /organon-memory-audit command.",
+        "developerName": "Pierre-André Folot",
+        "category": "Productivity",
+        "websiteURL": "https://github.com/folotp/pa-agent-kit/tree/main/plugins/organon"
+      }
+    }
+  }
 }
