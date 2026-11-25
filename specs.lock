@@ -23,32 +23,32 @@
     },
     "antigravity-hooks": {
       "kind": "page",
-      "sha256": "a9e0d0236a0b679ad9d7cd47e6c9543cf654f59253f9d6dd8289b5ba8d804a51",
+      "sha256": "7bb16532f1bc2d431a85f37daa1e823513e3d483cb5b49b3981d09ef09b9ef05",
       "url": "https://antigravity.google/docs/hooks"
     },
     "antigravity-rules": {
       "kind": "page",
-      "sha256": "aa09402f3aad0859d2c95d05c5529cbc9acbc636f615a35d68309d2eeb15cbce",
+      "sha256": "539bdab54ca24e3983910c63eb04ba5ebcece1bc26a6d09cdab654415da274b0",
       "url": "https://antigravity.google/docs/rules/"
     },
     "claude-agents": {
       "kind": "page",
-      "sha256": "5466954a992870d13715b1e5a933a49bebba9ddcfee2e72f7a19b3e4aacc6990",
+      "sha256": "5009da9098bc24888b27a387643a68e7c08b472f7d6e210d6cffe2c556ae4c7a",
       "url": "https://code.claude.com/docs/en/sub-agents.md"
     },
     "claude-plugin-marketplaces": {
       "kind": "page",
-      "sha256": "09ca4f45324f12bfae726823b14c7b3c5bdd8f31261afe74c93691d2d21b4e1c",
+      "sha256": "b7f322230ff0e37149df27b9d4f0bea17b7c80eb1fb2b4a1c23ebc78d224e2b7",
       "url": "https://code.claude.com/docs/en/plugin-marketplaces.md"
     },
     "claude-plugins": {
       "kind": "page",
-      "sha256": "2cd1435b248ca3e037b0b62b2d4e6a720791829959483d6940c7c4e3596314ce",
+      "sha256": "6d2d7ad4b87c4af44ee5fa43ceeac553bca3cdab47e76fea5cfc0cc1e68c66d8",
       "url": "https://code.claude.com/docs/en/plugins-reference.md"
     },
     "claude-skills": {
       "kind": "page",
-      "sha256": "632e75ce5b55590853a15a1539dbfccfcd02e884a2acf93abc176c3356954fad",
+      "sha256": "0e2505f3bb6b7a8e3c1278e360564cbb81643a34fe4ebfecef4317ad495c2992",
       "url": "https://code.claude.com/docs/en/skills.md"
     },
     "codex-hooks": {
@@ -68,7 +68,7 @@
     },
     "copilot-instructions": {
       "kind": "page",
-      "sha256": "9b8969ff46fdea9e77a05b219d517b2794e691194648c6814e6f56c20d7ec705",
+      "sha256": "0f2c00c69b57bd04350edd037b083691b17a93488a865b35a22ba68628f0c3fd",
       "url": "https://docs.github.com/en/copilot/concepts/prompting-and-context/custom-instructions"
     }
   }
