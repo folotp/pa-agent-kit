@@ -1,5 +1,5 @@
 interface:
-  display_name: "Help"
+  display_name: "PA Dev · Help"
   short_description: "List every dev- command and what waits for you"
 policy:
   allow_implicit_invocation: false
