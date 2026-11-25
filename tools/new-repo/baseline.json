@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "plain": {
+      "description": "Tool or standalone repository",
+      "browser_checks": []
+    },
+    "live": {
+      "description": "Repository in front of a live system",
+      "browser_checks": [
+        {
+          "id": "release_credential",
+          "page": "Operator terminal and Keychain",
+          "value": "Provision the scoped write credential and confirm a prompt on every read. Complete the gate configuration before using the release verb.",
+          "sessions": ["00", "35"]
+        }
+      ]
+    }
+  },
+  "api": {
+    "repository": {
+      "allow_merge_commit": {"value": false, "sessions": ["00"]},
+      "allow_squash_merge": {"value": true, "sessions": ["00"]},
+      "allow_rebase_merge": {"value": false, "sessions": ["00"]},
+      "allow_auto_merge": {"value": false, "sessions": ["30"]},
+      "delete_branch_on_merge": {"value": true, "sessions": ["00", "07"]},
+      "pull_request_creation_policy": {"value": "collaborators_only", "when": "public", "sessions": ["00"]},
+      "security_and_analysis.secret_scanning.status": {"value": "enabled", "when": "public", "sessions": ["00"]},
+      "security_and_analysis.secret_scanning_push_protection.status": {"value": "enabled", "when": "public", "sessions": ["00"]}
+    },
+    "actions_permissions": {
+      "enabled": {"value": true, "sessions": ["30"]},
+      "allowed_actions": {"value": "all", "sessions": ["30"]},
+      "sha_pinning_required": {"value": true, "sessions": ["29b"]}
+    },
+    "workflow_permissions": {
+      "default_workflow_permissions": {"value": "read", "sessions": ["25", "30"]},
+      "can_approve_pull_request_reviews": {"value": true, "when": "mise_bump_installed", "sessions": ["29d", "30"]}
+    },
+    "dependabot_alerts": {"value": true, "sessions": ["00", "29b"]},
+    "dependabot_security_updates": {"value": {"enabled": true, "paused": false}, "sessions": ["00", "29b", "30"]},
+    "immutable_releases": {"value": true, "sessions": ["25", "30"]},
+    "branch_protection": {
+      "when": "branch_protection_available",
+      "branch": "main",
+      "required_status_checks": {"value": ["Core checks"], "sessions": ["25", "35"]},
+      "enforce_admins": {"value": true, "sessions": ["25"]},
+      "required_pull_request_reviews": {
+        "value": {
+          "dismiss_stale_reviews": true,
+          "require_code_owner_reviews": true,
+          "required_approving_review_count": 1
+        },
+        "sessions": ["25"]
+      },
+      "allow_force_pushes": {"value": false, "sessions": ["25"]},
+      "allow_deletions": {"value": false, "sessions": ["25"]}
+    },
+    "tag_ruleset": {
+      "when": "rulesets_available",
+      "value": {
+        "name": "release-tags",
+        "target": "tag",
+        "enforcement": "active",
+        "conditions": {
+          "ref_name": {
+            "include": ["refs/tags/*/v*", "refs/tags/harness-v*", "refs/tags/stable"],
+            "exclude": []
+          }
+        },
+        "rules": [{"type": "creation"}, {"type": "update"}, {"type": "deletion"}],
+        "bypass_actors": [{"role": "repository_admin", "mode": "always"}]
+      },
+      "sessions": ["25", "30"]
+    }
+  },
+  "files": {
+    ".github/CODEOWNERS": {"value": "* @{repository_owner}\n", "sessions": ["24g", "25"]},
+    ".github/dependabot.yml": {"source": "released_core", "sessions": ["24h", "29b", "29d"]},
+    ".github/workflows/ci.yml": {"source": "released_core", "sessions": ["19", "24h"]},
+    ".github/workflows/mise-bump.yml": {"source": "released_core_or_workshop_template", "sessions": ["29d", "35"]}
+  },
+  "browser_checks": [
+    {
+      "id": "agent_apps",
+      "page": "Account settings → Applications → Installed GitHub Apps",
+      "value": "Add the repository to the Claude Code, Codex and Antigravity App installations.",
+      "sessions": ["00", "35"]
+    },
+    {
+      "id": "malware_alerts",
+      "page": "Repository settings → Advanced Security",
+      "value": "Enable Dependabot malware alerts where GitHub offers the option.",
+      "sessions": ["00"]
+    },
+    {
+      "id": "dependabot_auto_triage",
+      "page": "Repository settings → Advanced Security → Dependabot",
+      "value": "Enable GitHub's auto-triage preset with no custom rules where available.",
+      "sessions": ["00"]
+    },
+    {
+      "id": "grouped_security_updates",
+      "page": "Repository settings → Advanced Security → Dependabot",
+      "value": "Enable grouped security updates.",
+      "sessions": ["29b"]
+    },
+    {
+      "id": "dependabot_config",
+      "page": "Insights → Dependency graph → Dependabot",
+      "value": "Confirm the version-update configuration has no error banner.",
+      "sessions": ["29b"]
+    },
+    {
+      "id": "auto_close_issues",
+      "page": "Repository settings → General → Issues",
+      "value": "Enable auto-close of issues when linked pull requests merge.",
+      "sessions": ["00"]
+    },
+    {
+      "id": "issue_creation",
+      "when": "public",
+      "page": "Repository settings → General → Issues",
+      "value": "Limit issue creation to collaborators.",
+      "sessions": ["00"]
+    },
+    {
+      "id": "automatic_dependency_submission",
+      "page": "Repository settings → Advanced Security → Dependency graph",
+      "value": "Keep automatic dependency submission off.",
+      "sessions": ["00"]
+    },
+    {
+      "id": "runners",
+      "page": "Repository settings → Actions → Runners",
+      "value": "Use GitHub-hosted runners only and confirm no self-hosted runner is registered.",
+      "sessions": ["00"]
+    },
+    {
+      "id": "bump_run_approval",
+      "when": "mise_bump_installed",
+      "page": "Mise bump pull request → Checks",
+      "value": "Approve and run the checks if GitHub holds the bump bot's pull request run.",
+      "sessions": ["29d", "30"]
+    },
+    {
+      "id": "credential_inventory",
+      "page": "Repository settings → Secrets and variables → Actions and Dependabot, and Settings → Webhooks",
+      "value": "Review secret names and webhook registrations against the repository's intended integrations.",
+      "sessions": ["30"]
+    }
+  ]
+}
