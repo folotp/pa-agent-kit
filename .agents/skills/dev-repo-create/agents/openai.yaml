@@ -1,2 +1,5 @@
+interface:
+  display_name: "PA Dev · Prepare a new repository"
+  short_description: "Scaffold a repository from a harness release"
 policy:
   allow_implicit_invocation: false

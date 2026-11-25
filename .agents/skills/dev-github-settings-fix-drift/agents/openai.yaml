@@ -1,2 +1,5 @@
+interface:
+  display_name: "PA Dev · Fix GitHub settings drift"
+  short_description: "Prepare and verify settings reconciliation"
 policy:
   allow_implicit_invocation: false

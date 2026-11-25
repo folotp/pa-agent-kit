@@ -1,0 +1,15 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "projectionlab",
+  "version": "0.1.1",
+  "description": "Read-only access to ProjectionLab financial plans via the Chrome MCP.",
+  "homepage": "https://github.com/folotp/pa-agent-kit/tree/main/plugins/projectionlab",
+  "repository": "https://github.com/folotp/pa-agent-kit",
+  "author": {
+    "name": "Pierre-André",
+    "email": "pierreandre@folot.net",
+    "url": "https://github.com/folotp"
+  },
+  "keywords": ["projectionlab", "financial-planning", "read-only", "chrome-mcp"],
+  "license": "MIT"
+}

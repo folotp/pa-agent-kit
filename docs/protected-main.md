@@ -21,6 +21,43 @@
 
 The release procedure and the `stable` pin are in [releases.md](releases.md).
 
+## Plugin and marketplace metadata
+
+`scripts/validate-marketplace.py` checks both catalogs, the portable packages,
+and version cells in the workshop README. It runs offline with the Python
+standard library.
+
+- **Claude catalog** requires an install ID, description, owner name and
+  HTTPS profile URL, and local entries with a name, source, description,
+  category and tags.
+- **Codex catalog** requires an install ID and `interface.displayName`, plus
+  local entries with a matching Claude source, category, and installation
+  and authentication policies. A listed plugin also needs the OpenAI
+  interface title, subtitle, details, developer name, category and HTTPS
+  website. Set these under `extensions.com.openai.interface` in its
+  portable manifest.
+- **Each plugin** carries the Agent Plugins 1.0.0 schema identifier in its
+  root `plugin.json`, plus the name, one authoritative version, description,
+  author name and HTTPS profile URL, homepage, repository, license, and
+  keywords. Its directory contains a landing README, a changelog, and the
+  Claude manifest. The Claude manifest normally links to the portable one.
+  The release packager writes the link target as a regular file into the
+  archive. To check the individual manifests with Claude Code, validate
+  copies that contain regular manifest files.
+- **Public directory submissions** use `plugins[].metadata.public` on the
+  Claude catalog entry. It accepts a JSON boolean and defaults to `false`.
+  Setting it to `true` requires HTTPS `supportUrl` and `privacyPolicyUrl`
+  in the Claude manifest, plus `supportURL` and `privacyPolicyURL` in the
+  OpenAI interface for Codex-listed plugins. Use a separate Claude manifest
+  for those Claude directory fields and keep the portable root free of
+  Claude-only keys. GitHub visibility, client installation and MIT licensing
+  are independent of the directory flag.
+
+Use `/dev-plugin-create` to collect metadata and prepare a valid scaffold.
+Add concrete environment requirements to each skill's `compatibility` field.
+Give Markdown reference files over 100 lines a contents list near the top.
+Preserve client-specific invocation controls.
+
 ## Bump PRs (specs.lock, mise pins)
 
 `specs-bump.yml` opens the weekly PR with the job token, so GitHub treats `github-actions[bot]` as its author. `mise-bump.yml` does the same for the mise pins (`mise.toml`, `mise.lock`, `.mise/locks/`): a monthly PR from `mise-bump/<date>` and a weekly security PR from `mise-security/<date>`, at most one open per kind. A manual run (the workflow's `kind` input: `version` or `security`) uses the same path. The required check is the PR's own `pull_request` run of `Marketplace validation`; nothing dispatches it by hand.

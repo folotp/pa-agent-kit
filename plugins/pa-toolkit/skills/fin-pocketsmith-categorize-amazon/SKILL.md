@@ -1,6 +1,7 @@
 ---
 name: fin-pocketsmith-categorize-amazon
 description: "Categorizes uncategorized Amazon transactions in PocketSmith by looking up the real order contents and proposing a category per item, reviewed with PA one item at a time — splitting into sub-transactions only when an order actually spans more than one category, and matching returns to their original charge instead of skipping them. Trigger on any mention of Amazon transactions/charges/refunds in PocketSmith, categorizing or splitting Amazon purchases, or cleaning up uncategorized Amazon.ca* / AMZN Mktp* entries."
+compatibility: "Requires PocketSmith tools and access to Amazon order history or an order export."
 ---
 
 # Amazon → PocketSmith categorization

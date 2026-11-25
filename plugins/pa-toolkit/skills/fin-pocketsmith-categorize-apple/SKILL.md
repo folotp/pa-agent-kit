@@ -1,6 +1,7 @@
 ---
 name: fin-pocketsmith-categorize-apple
 description: "Categorizes uncategorized Apple (APPLE.COM/BILL) transactions in PocketSmith by looking up real receipt contents in Apple Mail (with the purchase-history page as a secondary source) and proposing a category per line item, reviewed with PA one item at a time. Splits into sub-transactions only when a single Apple charge genuinely spans more than one category, and matches refunds to their original charge. Trigger on any mention of Apple/App Store/iCloud/Apple Music/iTunes transactions or charges in PocketSmith, categorizing or splitting APPLE.COM/BILL entries, or cleaning up uncategorized Apple charges."
+compatibility: "Requires PocketSmith tools and access to Apple Mail receipts or Apple purchase history."
 ---
 
 # Apple → PocketSmith categorization

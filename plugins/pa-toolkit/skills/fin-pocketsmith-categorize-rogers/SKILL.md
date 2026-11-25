@@ -1,6 +1,7 @@
 ---
 name: fin-pocketsmith-categorize-rogers
 description: "Splits uncategorized Rogers wireless transactions in PocketSmith three ways (PA / Élise / Zachary) by reading the per-line totals already printed on the matching monthly Rogers invoice, reviewed with PA one transaction at a time before writing. Trigger on any mention of Rogers transactions/charges in PocketSmith, categorizing or splitting the Rogers phone bill, or cleaning up uncategorized ROGERS entries."
+compatibility: "Requires PocketSmith tools and access to the matching Rogers invoice PDF."
 ---
 
 # Rogers → PocketSmith categorization

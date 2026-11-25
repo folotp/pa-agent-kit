@@ -1,2 +1,5 @@
+interface:
+  display_name: "PA Dev · Prepare plugin release"
+  short_description: "Prepare bumps, tags, and plugin publication"
 policy:
   allow_implicit_invocation: false

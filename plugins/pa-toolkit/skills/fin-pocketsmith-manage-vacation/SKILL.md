@@ -1,6 +1,7 @@
 ---
 name: "fin-pocketsmith-manage-vacation"
 description: "Manages the complete lifecycle of a trip or vacation (a 'séjour') in PA's PocketSmith: opens the dated vacation label, finds and categorizes the vacation's transactions through one-at-a-time interactive review, renames the label idempotently if dates change, closes the vacation with a completeness audit and cost report, and applies the Alimentation (formerly Épicerie) prorata budget correction. Callable at any point in a vacation's life — before departure, mid-trip, after return, or repeatedly — because every call re-derives the real state from PocketSmith rather than trusting what a previous call did. Trigger on any mention of a trip/vacation/séjour/voyage/vacances in PocketSmith, opening or closing a vacation label, finding missed vacation transactions, renaming a Voyage-/Vacances- label, or correcting the grocery budget for a trip."
+compatibility: "Nécessite les outils PocketSmith et le connecteur MCP Organon pour consulter les règles du coffre."
 ---
 
 # Gestion d'un séjour PocketSmith

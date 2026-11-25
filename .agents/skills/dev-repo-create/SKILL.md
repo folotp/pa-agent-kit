@@ -3,6 +3,7 @@ name: dev-repo-create
 description: Prepare a new GitHub repository clone from a released harness with the plain or live settings profile and an owner checklist.
 argument-hint: '<checkout> --profile <plain|live> [--dry-run]'
 disable-model-invocation: true
+compatibility: "Requires the workshop checkout, Git, and its pinned tools. GitHub provisioning requires owner approval and access."
 ---
 
 Use the workshop checkout. Obtain the absolute path to the new clone and the profile. The operator creates the repository in GitHub and installs the three agent Apps. The checkout must have its GitHub origin set.

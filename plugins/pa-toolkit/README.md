@@ -41,10 +41,12 @@ The `fin-*` skills were migrated verbatim from PA's account skills. Their MCP to
 ## Install
 
 ```text
-/plugin marketplace add folotp/pa-marketplace
+/plugin marketplace add folotp/pa-agent-kit
 /plugin install pa-toolkit@pa-marketplace
 /reload-plugins
 ```
+
+The Claude catalog provides the current install path for PA Toolkit. The Codex marketplace lists plugins reviewed for that client.
 
 Each GitHub Release also carries `pa-toolkit-v<version>.plugin` for a direct install in Cowork.
 
@@ -63,6 +65,8 @@ Write a section titled « Profil de gouvernance des décisions » in that domain
 No change to this repo is needed.
 
 ## Releases
+
+See the [changelog](CHANGELOG.md) and [workshop releases](https://github.com/folotp/pa-agent-kit/releases).
 
 From the workshop use `/dev-plugin-release pa-toolkit`. For release steps see the [workshop release guide](../../docs/releases.md).
 
@@ -91,3 +95,7 @@ Supported development agents are Codex, Claude Code, GitHub Copilot and Google
 Antigravity, with GitHub Actions CI for deterministic checks. See the
 [support matrix](https://github.com/folotp/pa-toolkit/blob/main/docs/supported-agents.md)
 and [reusable acceptance scenarios](https://github.com/folotp/pa-toolkit/blob/main/docs/agent-test-plan.md).
+
+## License
+
+[MIT](LICENSE).

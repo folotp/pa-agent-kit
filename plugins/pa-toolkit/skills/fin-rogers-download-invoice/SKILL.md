@@ -1,6 +1,7 @@
 ---
 name: fin-rogers-download-invoice
 description: "Downloads Rogers wireless invoice PDFs from MonRogers and archives them locally as 'Rogers YYYYMMDD.pdf' in PA's Téléphone mobile folder, using the billing date printed on the invoice. Trigger on any mention of downloading, saving, or archiving Rogers bills/invoices, checking for missing Rogers invoices, or preparing invoices for fin-pocketsmith-categorize-rogers."
+compatibility: "Requires browser access to MonRogers and local file access to archive the invoice."
 ---
 
 # Rogers invoice download & archive

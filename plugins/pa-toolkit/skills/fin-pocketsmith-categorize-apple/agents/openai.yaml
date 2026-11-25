@@ -1,0 +1,3 @@
+interface:
+  display_name: "PA Toolkit · Categorize Apple charges"
+  short_description: "Match Apple receipts to PocketSmith charges"

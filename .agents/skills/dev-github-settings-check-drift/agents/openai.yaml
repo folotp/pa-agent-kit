@@ -1,2 +1,5 @@
+interface:
+  display_name: "PA Dev · Check GitHub settings drift"
+  short_description: "Compare GitHub settings to the baseline"
 policy:
   allow_implicit_invocation: false

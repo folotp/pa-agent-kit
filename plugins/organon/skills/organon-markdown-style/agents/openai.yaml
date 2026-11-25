@@ -1,0 +1,3 @@
+interface:
+  display_name: "Organon · Apply Markdown conventions"
+  short_description: "Write note bodies in the vault’s style"

@@ -17,6 +17,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
 CLAUDE_MARKETPLACE = ".claude-plugin/marketplace.json"
+WORKSHOP = "folotp/pa-agent-kit"
+WORKSHOP_URL = f"https://github.com/{WORKSHOP}"
+PORTABLE_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
 BOTS = ("claude", "codex", "antigravity")
 BUMPS = ("patch", "minor", "major")
 NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -86,16 +89,31 @@ def create_plugin(args, repo=ROOT):
         raise ValueError(f"plugins/{args.plugin} already exists. Use /dev-plugin-release {args.plugin} for a version bump")
     plugin = args.plugin
     description = args.description
-    tags = [tag.strip() for tag in (args.tags or "").split(",") if tag.strip()]
-    manifest = {"name": plugin, "version": args.version, "description": description}
+    tags = [tag.strip() for tag in args.tags.split(",") if tag.strip()]
+    if not tags:
+        raise ValueError("provide at least one catalog tag")
+    if args.component == "skills" and not 1 <= len(args.compatibility or "") <= 500:
+        raise ValueError("provide a 1–500 character --compatibility for a skill")
+    manifest = {
+        "$schema": PORTABLE_SCHEMA,
+        "name": plugin,
+        "version": args.version,
+        "description": description,
+        "author": {"name": args.author_name, "url": args.author_url},
+        "homepage": f"{WORKSHOP_URL}/tree/main/plugins/{plugin}",
+        "repository": WORKSHOP_URL,
+        "license": args.license,
+        "keywords": tags,
+    }
     entry = {"name": plugin, "source": f"./plugins/{plugin}", "description": description,
-             "category": args.category, "tags": tags}
+             "displayName": args.display_name, "category": args.category, "tags": tags}
 
     marketplace = repo / CLAUDE_MARKETPLACE
     readme = repo / "README.md"
     marketplace_text = marketplace.read_text()
     readme_text = readme.read_text()
-    entries = json.loads(marketplace_text)["plugins"]
+    catalog = json.loads(marketplace_text)
+    entries = catalog["plugins"]
     if any(item["name"] == plugin or item["source"] == entry["source"] for item in entries):
         raise ValueError(f"{plugin} already has a marketplace entry")
     if re.search(rf"(?m)^\|\s*\[\x60{re.escape(plugin)}\x60\]", readme_text):
@@ -126,8 +144,9 @@ def create_plugin(args, repo=ROOT):
     updated_readme = readme_text[:index] + "\n" + row + readme_text[index:]
 
     frontmatter = f"name: {plugin}\ndescription: {json.dumps(description, ensure_ascii=False)}\n"
+    skill_frontmatter = frontmatter + f"compatibility: {json.dumps(args.compatibility, ensure_ascii=False)}\n"
     stub = {
-        "skills": (f"skills/{plugin}/SKILL.md", f"---\n{frontmatter}---\n\nAdd the skill instructions here.\n"),
+        "skills": (f"skills/{plugin}/SKILL.md", f"---\n{skill_frontmatter}---\n\nAdd the skill instructions here.\n"),
         "commands": (f"commands/{plugin}.md", f"---\n{frontmatter}---\n\nAdd the command instructions here.\n"),
         "agents": (f"agents/{plugin}.md", f"---\n{frontmatter}---\n\nAdd the agent instructions here.\n"),
         "hooks": ("hooks/hooks.json", '{\n  "hooks": {}\n}\n'),
@@ -140,7 +159,16 @@ def create_plugin(args, repo=ROOT):
     feature_worktree(repo)
     validate(repo)
     generated = {
-        path / ".claude-plugin/plugin.json": json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        path / "plugin.json": json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        path / "README.md": (
+            f"# {args.display_name}\n\n{description}\n\n"
+            "## Install\n\n"
+            f"```text\n/plugin marketplace add {WORKSHOP}\n"
+            f"/plugin install {plugin}@{catalog['name']}\n/reload-plugins\n```\n\n"
+            f"See the [{args.component} component]({stub_path}), "
+            f"[changelog](CHANGELOG.md), and [workshop releases]({WORKSHOP_URL}/releases).\n"
+        ),
+        path / "CHANGELOG.md": "# Changelog\n\n## Unreleased\n\n- Add the initial plugin scaffold.\n",
         path / stub_path: stub_text,
     }
     if marketplace.read_text() != marketplace_text or readme.read_text() != readme_text:
@@ -151,6 +179,9 @@ def create_plugin(args, repo=ROOT):
             target.parent.mkdir(parents=True, exist_ok=True)
             with target.open("x") as file:
                 file.write(content)
+        claude_manifest = path / ".claude-plugin/plugin.json"
+        claude_manifest.parent.mkdir()
+        claude_manifest.symlink_to("../plugin.json")
         marketplace.write_text(updated_marketplace)
         readme.write_text(updated_readme)
         validate(repo)
@@ -360,7 +391,12 @@ def main():
     create.add_argument("plugin", type=plugin_name)
     create.add_argument("--description", required=True, type=short_text)
     create.add_argument("--category", required=True, type=short_text)
-    create.add_argument("--tags", type=short_text)
+    create.add_argument("--tags", required=True, type=short_text)
+    create.add_argument("--display-name", required=True, type=short_text)
+    create.add_argument("--author-name", required=True, type=short_text)
+    create.add_argument("--author-url", required=True, type=short_text)
+    create.add_argument("--license", required=True, type=short_text)
+    create.add_argument("--compatibility", type=short_text, help="environment requirements for a skills component")
     create.add_argument("--version", default="0.1.0", type=simple_version)
     create.add_argument("--component", choices=("skills", "commands", "agents", "hooks"), default="skills")
     create.add_argument("--dry-run", action="store_true")

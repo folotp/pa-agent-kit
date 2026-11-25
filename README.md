@@ -17,14 +17,14 @@ Codex: `codex plugin marketplace add folotp/pa-agent-kit`, then `codex plugin ad
 
 | Plugin | Version | Source | Description |
 | --- | --- | --- | --- |
-| [`projectionlab`](plugins/projectionlab/) | 0.1.0 | in-repo | Read-only access to ProjectionLab financial plans via the Chrome MCP. |
-| [`session-telemetry`](plugins/session-telemetry/) | 0.2.1 | in-repo | Captures a structured snapshot of the current Claude session and appends one NDJSON line to the Organon vault telemetry log via Organon MCP. |
-| [`organon`](plugins/organon/) | 1.5.6 | in-repo | Organon vault conventions for Claude — 8 description-triggered skills covering read and write discipline, frontmatter, markdown style, session discipline, Bases, JSON Canvas, and diagramming. |
-| [`pa-toolkit`](plugins/pa-toolkit/) | 0.3.0 | in-repo | PA's personal toolkit — decision-gatekeeper agent (triages a proposed change against a domain's decision records, driven by governance profiles in the Organon vault) and six PocketSmith and Rogers skills. |
+| [`projectionlab`](plugins/projectionlab/) | 0.1.1 | in-repo | Read-only access to ProjectionLab financial plans via the Chrome MCP. |
+| [`session-telemetry`](plugins/session-telemetry/) | 0.2.2 | in-repo | Captures a structured snapshot of the current Claude session and appends one NDJSON line to the Organon vault telemetry log via Organon MCP. |
+| [`organon`](plugins/organon/) | 1.5.7 | in-repo | Organon vault conventions for Claude — 8 description-triggered skills covering read and write discipline, frontmatter, markdown style, session discipline, Bases, JSON Canvas, and diagramming. |
+| [`pa-toolkit`](plugins/pa-toolkit/) | 0.3.1 | in-repo | PA's personal toolkit — decision-gatekeeper agent (triages a proposed change against a domain's decision records, driven by governance profiles in the Organon vault) and six PocketSmith and Rogers skills. |
 
 ## Plugin sources
 
-Every plugin lives under `plugins/<name>/` of this repository, and both manifests list it by relative path: `"source": "./plugins/<name>"` for Claude Code, `{"source": "local", "path": "./plugins/<name>"}` for Codex. The version lives in the plugin's `plugin.json`; bump it on each meaningful change so users get an Update notification (`/dev-plugin-release <name> <patch|minor|major>`).
+Every plugin lives under `plugins/<name>/` of this repository. The Claude catalog lists all four by relative path, and the Codex catalog lists the reviewed plugins: `"source": "./plugins/<name>"` for Claude Code, `{"source": "local", "path": "./plugins/<name>"}` for Codex. The version lives in the plugin's `plugin.json`; bump it on each meaningful change so users get an Update notification (`/dev-plugin-release <name> <patch|minor|major>`).
 
 **Single source of truth for version.** Per the [official docs](https://code.claude.com/docs/en/plugin-marketplaces#version-resolution-and-release-channels), Claude Code resolves a plugin's version from the first of these set: `version` in `plugin.json` -> `version` in the marketplace entry -> the source's commit SHA. **Don't set `version` in both `plugin.json` and the marketplace entry** — `plugin.json` always wins silently, so a stale duplicate can mask a real bump. This marketplace keeps `version` in `plugin.json` only.
 
@@ -41,8 +41,10 @@ Merging a version bump is the release: see [docs/releases.md](docs/releases.md).
   marketplace.json          ← Codex registry (portable plugins only)
 plugins/                    ← every plugin
   <plugin-name>/
+    plugin.json             ← portable manifest and version source
     .claude-plugin/
-      plugin.json           ← per-plugin manifest (optional but recommended)
+      plugin.json           ← Claude manifest
+    CHANGELOG.md
     skills/<skill>/SKILL.md
     commands/<cmd>.md
     agents/<agent>.md
@@ -61,4 +63,4 @@ to tag and publish after the PR merges. [Workshop release guide](docs/releases.m
 
 ## License
 
-Private. Not for redistribution.
+Each plugin is MIT-licensed. See the LICENSE file in its plugin directory. The workshop tooling is private.

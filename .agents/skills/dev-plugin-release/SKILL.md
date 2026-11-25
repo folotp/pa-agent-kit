@@ -3,6 +3,7 @@ name: dev-plugin-release
 description: Prepare the next workshop plugin release step from bump PR through marketplace refresh.
 argument-hint: <plugin> [patch|minor|major]
 disable-model-invocation: true
+compatibility: "Requires the workshop checkout, its pinned tools, and GitHub access. Tagging and publication require owner approval."
 ---
 
 Run `./dev x python3 -B tools/workshop/plugins.py release <plugin> [patch|minor|major] --bot <bot>` from the workshop. Use `claude` in Claude Code, `codex` in Codex and `antigravity` in Antigravity. Ask for the plugin if absent. If PA requests a new version and omitted the increment, ask which increment when the script reports that a bump is the next step.

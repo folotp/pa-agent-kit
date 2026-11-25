@@ -1,0 +1,3 @@
+interface:
+  display_name: "Organon · Apply frontmatter conventions"
+  short_description: "Use the vault schemas when editing notes"
