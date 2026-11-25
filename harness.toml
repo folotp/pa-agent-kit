@@ -15,15 +15,18 @@ command-index = "harness/commands list --check"
 operator-docs = "python3 -B tools/workshop/check_docs.py check-docs docs AGENTS.md CLAUDE.md harness/gh-token.md"
 cited-paths = "python3 -B tools/workshop/check_docs.py check-paths"
 unit-tests = "python3 -B -m unittest discover -s tests -v"
+new-repo-tests = "python3 -B -m unittest discover -s tools/new-repo -v"
 marketplace = "python3 -B scripts/validate-marketplace.py"
 shellcheck = "shellcheck dev harness/dev harness/templates/dev harness/gate harness/guard harness/check-dependabot harness/check-bindings harness/gh-token.sh harness/git-prune-merged.sh harness/commands harness/harness-sync harness/skill-links harness/githooks/* tools/probes/*.sh scripts/cloud-env-setup.sh"
 # The workflows, and the consumers' CI skeleton (never under .github/workflows/ here).
 actionlint = "actionlint && actionlint harness/templates/ci.yml"
 
-# Own verbs, `./dev <name> [args]`. `./dev specs update` is the only online one: the weekly job and
-# PA run it; nothing else resolves an upstream source.
+# Workshop verbs, `./dev <name> [args]`.
 [verbs]
 specs = "python3 -B tools/specs/specs.py"
 # Workshop only (not in core.files): `./dev sync <rev> <consumer-checkout> [--pr]` copies the core into a
 # consumer's .harness/ as one commit; see tools/sync/sync.py and docs/harness-core.md, 'Sync'.
 sync = "python3 -B tools/sync/sync.py"
+
+# For a read-only dry run without starting mise, call tools/new-repo/init.py with python3 -B.
+init = "python3 -B tools/new-repo/init.py"
