@@ -1,5 +1,5 @@
 interface:
-  display_name: "Status"
+  display_name: "PA Dev · Status"
   short_description: "What waits for you, each with its command"
 policy:
   allow_implicit_invocation: false

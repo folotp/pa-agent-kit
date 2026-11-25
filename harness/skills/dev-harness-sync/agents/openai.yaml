@@ -1,5 +1,5 @@
 interface:
-  display_name: "Sync harness core"
+  display_name: "PA Dev · Sync harness core"
   short_description: "Open a PR to sync a tagged harness core"
 policy:
   allow_implicit_invocation: false
