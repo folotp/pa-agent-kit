@@ -83,7 +83,13 @@ class ArgumentsTest(unittest.TestCase):
 
 # The Keychain, the JWT and GitHub replaced by functions; every API call is logged in $LOG.
 STUBS = r"""
-security() { printf -- '-----BEGIN TEST' | openssl base64 -A; }
+security() {
+  if [[ ${!#} != -w ]]; then
+    echo unexpected-metadata-lookup >>"$LOG"
+    return 1
+  fi
+  printf -- '-----BEGIN TEST' | openssl base64 -A
+}
 app_jwt() { printf jwt; }
 resolve_repo() { printf o/r; }
 api() {
@@ -161,6 +167,7 @@ class RevocationTest(unittest.TestCase):
         out, _ = process.communicate(timeout=30)
         self.assertEqual(process.returncode, 0)
         self.assertNotIn("tok", out)
+        self.assertNotIn("unexpected-metadata-lookup", self.calls())
         self.assertIn("DELETE /installation/token", self.calls())
 
     def test_interrupted_command_still_revokes(self):
@@ -180,11 +187,49 @@ class RevocationTest(unittest.TestCase):
         self.assertNotIn("DELETE /installation/token", self.calls())
 
 
+class KeychainFailureTest(unittest.TestCase):
+    def test_failed_lookup_reports_visibility_and_stops_before_github(self):
+        # Only arguments and call order enter the log. Raw tool output must stay private.
+        stubs = r"""
+security() {
+  echo "$*" >>"$LOG"
+  echo private-output
+  echo private-diagnostic >&2
+  case " $* " in *" -w "*) return 128 ;; *) return "$METADATA_RC" ;; esac
+}
+api() { echo unexpected-api >>"$LOG"; }
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "calls"
+            for app in ("codex", "claude", "antigravity", "owner"):
+                for metadata_rc in (0, 44):
+                    with self.subTest(app=app, metadata_rc=metadata_rc):
+                        log.write_text("")
+                        owner = app == "owner"
+                        service = "github-owner-token" if owner else "github-app-key"
+                        account = "folotp" if owner else app
+                        attrs = f"find-generic-password -s {service} -a {account}"
+                        args = "owner -- echo unexpected-command" if owner else f"{app} --repo o/r --info"
+                        result = bash(stubs + "\nmain " + args, LOG=str(log), METADATA_RC=str(metadata_rc))
+                        expected = [attrs + " -w", attrs]
+                        if owner:
+                            expected = [attrs] if metadata_rc else [attrs, attrs + " -w"]
+                        self.assertEqual(log.read_text().splitlines(), expected)
+                        self.assertEqual(result.returncode, 1)
+                        self.assertEqual(result.stdout, "")
+                        self.assertNotIn("private-", result.stderr)
+                        self.assertIn(f"{service}/{account}", result.stderr)
+                        self.assertIn(f"metadata exit {metadata_rc}", result.stderr)
+                        self.assertIn("could not locate" if metadata_rc else "was visible", result.stderr)
+                        value = "not attempted" if owner and metadata_rc else "exit 128"
+                        self.assertIn(f"value lookup {value}", result.stderr)
+                        self.assertIn("done: no token minted or wrapped command run", result.stderr)
+                        self.assertNotIn("add-generic-password", result.stderr)
+
+
 class OwnerModeTest(unittest.TestCase):
     """24g C6: `owner -- CMD` with the Keychain item github-owner-token; `pa` is refused by name.
     The Keychain is a stub function: present or not, dialog allowed or denied."""
-
-    CREATE = 'security add-generic-password -U -s github-owner-token -a folotp -T "" -w'
 
     def owner(self, security, args="owner -- sh -c 'echo ran GH_TOKEN=$GH_TOKEN'"):
         script = f'source "{SCRIPT}"\n{security}\nmain {args}'
@@ -197,26 +242,6 @@ class OwnerModeTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stderr.splitlines(), [
             "gh-token: the pa mode is now owner: run gh-token.sh owner -- CMD (Keychain item github-owner-token, see gh-token.md)"])
-
-    def test_a_missing_item_prints_the_command_that_creates_it(self):
-        # Every read fails: the attribute read (no -w) finds no item, as `security` exits 44.
-        result = self.owner('security() { return 44; }')
-        self.assertEqual(result.returncode, 1)
-        self.assertNotIn("ran", result.stdout)
-        lines = result.stderr.splitlines()
-        self.assertEqual(lines[0], "gh-token: no Keychain item github-owner-token for folotp")
-        self.assertEqual(lines[1], "done: nothing ran")
-        self.assertTrue(lines[2].startswith("left for PA: create it once in your own terminal") and self.CREATE in lines[2], lines[2])
-        self.assertEqual(lines[3], "next: re-run the same command")
-
-    def test_a_denied_dialog_runs_nothing_and_says_so(self):
-        # The item exists (attributes readable), but the secret read is denied at the dialog.
-        result = self.owner('security() { case " $* " in *" -w "*) return 128 ;; esac; }')
-        self.assertEqual(result.returncode, 1)
-        self.assertNotIn("ran", result.stdout)
-        self.assertIn("the owner token was not released: the Keychain dialog was denied or closed", result.stderr)
-        self.assertIn("left for PA: click Allow (never Always Allow) in the dialog for github-owner-token", result.stderr)
-        self.assertTrue(result.stderr.endswith("next: re-run the same command\n"), result.stderr)
 
     def test_a_released_token_reaches_the_command_only(self):
         result = self.owner('security() { case " $* " in *" -w "*) printf owner-tok ;; esac; }')

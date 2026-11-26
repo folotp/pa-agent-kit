@@ -91,10 +91,8 @@ shows a merged PR from that branch whose last commit is exactly the local tip.
 
 `/dev-run-with-owner-token` holds the recipes. macOS shows a Keychain dialog
 for `github-owner-token`. PA clicks **Allow** (never **Always Allow**). A
-denied or closed dialog exits 1 and nothing runs; the script then says so and
-that the next step is to re-run the same command. Agents ask PA before running
-this form, naming the exact command and why; the call needs the sandbox off
-(the dialog does); PA answers the dialog.
+failed value read exits 1 before the command starts. Agents ask PA before running
+this form, naming the exact command and why; local Codex requests per-command escalation as described in the shared block of `AGENTS.md`. PA answers the dialog.
 
 **Reach of owner mode.** The script exports PA's token (`GH_TOKEN` and the git
 credential entries) to the command and to everything that command starts, for
@@ -109,9 +107,7 @@ refused with one line naming `owner`.
 ## Owner token
 
 The owner token lives in the Keychain item `github-owner-token` (account
-`folotp`), created so that every read prompts (`-T ""`). When the item is
-missing, `gh-token.sh owner` prints this command and runs nothing. PA runs it
-once, in a terminal; with no value after `-w`, `security` prompts for the
+`folotp`), created so that every read prompts (`-T ""`). For initial setup, PA runs this command once in Terminal; with no value after `-w`, `security` prompts for the
 token, which never shows:
 
 ```bash
@@ -139,11 +135,23 @@ each App's settings page).
 
 ## Failure behaviour
 
-Errors print the failing step, the HTTP status and GitHub's message, never a
-key or a token. Common causes: no Keychain item for the App; the App is not
-installed on the repository (HTTP 404 on `/repos/OWNER/NAME/installation`); for
-the owner mode, a missing `github-owner-token` item or a denied dialog (each
-ends with `done:`, `left for PA:` and `next:` lines).
+A failed App key read triggers one metadata lookup for the same account. Owner
+mode checks metadata first and requests the value only when the item is visible.
+A lookup failure reports the shell exit statuses and suppresses Keychain output.
+A failed metadata lookup describes what this process can see. Compare the
+metadata-only Terminal command in the error before considering any item change.
+If metadata succeeds but the value read fails, check access to that specific
+item. For owner mode, establish whether PA saw and approved the one-time prompt.
+
+Local Codex uses the per-command approval recipe in the shared block of
+`AGENTS.md`. If the wrapper ran in the default sandbox and the item was
+invisible, request escalation once for the same authorized operation. If it
+already ran with escalation, report both lookup results. A tool approval
+refusal happens before the wrapper starts. Leave the working credential in place.
+
+GitHub API failures report the request, HTTP status and GitHub message. For
+example, HTTP 404 on the repository installation lookup can indicate the App
+is not installed on that repository.
 
 ## Renewal
 
