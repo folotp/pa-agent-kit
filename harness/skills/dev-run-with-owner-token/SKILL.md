@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Prepare a command for the owner token
 
-PA's own token is released only by `<core>/gh-token.sh owner -- CMD`, one command at a time, after a Keychain dialog PA answers. An agent never runs it and never sees the token: this skill writes the exact line, and PA runs it in a terminal (in Claude Code, by typing `!` and the line). `<core>/gh-token.md`, 'Owner token', is the reference.
+PA's own token is released only by `<core>/gh-token.sh owner -- CMD`, one command at a time, after a Keychain dialog PA answers. This skill prepares the exact line for PA to run in a terminal (in Claude Code, by typing `!` and the line). If PA explicitly authorizes local Codex to run that exact operation, follow the per-command approval instructions in `AGENTS.md`. PA still answers the separate Keychain prompt. `<core>/gh-token.md`, 'Owner token', is the reference.
 
 `<core>` is `.harness` in a repository that syncs the core and `harness` in the workshop (`pa-agent-kit`); run from the repository root. `<bot>` is your own GitHub App: `claude` in Claude Code, `codex` in Codex, `antigravity` in Antigravity.
 

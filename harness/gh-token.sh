@@ -148,31 +148,34 @@ token_request() {
     {repositories: [$repo], permissions: (.permissions | if $ro == "" then . else map_values("read") end)}'
 }
 
-# The command PA runs once, in a terminal, to create the owner item: `-w` last prompts for the
-# token, which never shows; `-T ""` makes every later read prompt (Allow, never Always Allow).
-owner_item_command() {
-  printf 'security add-generic-password -U -s %s -a %s -T "" -w' "$OWNER_SERVICE" "$OWNER_ACCOUNT"
-}
-
-# A refusal of owner mode: what happened, what is left for PA, the next step (24i's output rule),
-# on stderr, then exit 1. Nothing ran.
-owner_refusal() {
-  printf 'gh-token: %s\ndone: nothing ran\nleft for PA: %s\nnext: re-run the same command\n' "$1" "$2" >&2
+# Report only the service/account and shell exit codes. Metadata describes visibility
+# to this process. A failed search cannot establish that an item needs creating.
+keychain_refusal() {
+  local service=$1 account=$2 metadata_rc=$3 value_rc=$4 reason next
+  if [[ $metadata_rc == 0 ]]; then
+    reason="Keychain item $service/$account was visible, but its value was not released"
+    next="review access to this item for the invoking process"
+  else
+    reason="this process could not locate Keychain item $service/$account"
+    next="compare the same metadata lookup in Terminal: /usr/bin/security find-generic-password -s $service -a $account >/dev/null"
+  fi
+  printf 'gh-token: %s (metadata exit %s, value lookup %s)\n' "$reason" "$metadata_rc" "$value_rc" >&2
+  if [[ $metadata_rc != 0 && ( $account == codex || $service == "$OWNER_SERVICE" ) ]]; then
+    printf '%s\n' 'Local Codex: if this ran in the default sandbox, request require_escalated once for the exact authorized wrapper command. If already escalated, report the lookup statuses.' >&2
+  fi
+  printf 'done: no token minted or wrapped command run\nleft for PA: check item visibility or access if the authorized invocation still fails (gh-token.md)\nnext: %s\n' "$next" >&2
   exit 1
 }
 
 run_as_owner() {
   local token
   [[ $# -gt 0 ]] || die "owner needs a command after --"
-  # The item's attributes only (no -w): this read shows no dialog and returns no secret, so a
-  # missing item is told apart from a denied dialog.
+  # Check visibility first so that an unavailable item never triggers a value request.
   security find-generic-password -s "$OWNER_SERVICE" -a "$OWNER_ACCOUNT" >/dev/null 2>&1 ||
-    owner_refusal "no Keychain item $OWNER_SERVICE for $OWNER_ACCOUNT" \
-      "create it once in your own terminal, typing the token at its prompt: $(owner_item_command) (gh-token.md, 'Owner token')"
+    keychain_refusal "$OWNER_SERVICE" "$OWNER_ACCOUNT" "$?" "not attempted"
   printf 'gh-token: releasing the owner token for one command: %s\n' "$*" >&2
   token=$(security find-generic-password -s "$OWNER_SERVICE" -a "$OWNER_ACCOUNT" -w 2>/dev/null) ||
-    owner_refusal "the owner token was not released: the Keychain dialog was denied or closed" \
-      "click Allow (never Always Allow) in the dialog for $OWNER_SERVICE"
+    keychain_refusal "$OWNER_SERVICE" "$OWNER_ACCOUNT" 0 "exit $?"
   export_git_auth "$token"
   unset token
   PATH="${caller_path:-$PATH}" exec "$@"
@@ -214,8 +217,12 @@ main() {
   [[ -n $client_id ]] || die "no Client ID recorded for $app in this script"
   repo=$(resolve_repo "$repo")
 
-  key_b64=$(security find-generic-password -s "$KEY_SERVICE" -a "$app" -w 2>/dev/null) \
-    || die "no Keychain item $KEY_SERVICE/$app (see harness/gh-token.md)"
+  local value_rc metadata_rc=0
+  key_b64=$(security find-generic-password -s "$KEY_SERVICE" -a "$app" -w 2>/dev/null) || {
+    value_rc=$?
+    security find-generic-password -s "$KEY_SERVICE" -a "$app" >/dev/null 2>&1 || metadata_rc=$?
+    keychain_refusal "$KEY_SERVICE" "$app" "$metadata_rc" "exit $value_rc"
+  }
   pem=$(printf '%s' "$key_b64" | tr -d ' \n' | openssl base64 -d -A 2>/dev/null) || true
   unset key_b64
   [[ $pem == -----BEGIN* ]] || die "Keychain item $KEY_SERVICE/$app is not a base64-encoded PEM"
