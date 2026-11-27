@@ -329,6 +329,38 @@ class GuardTest(unittest.TestCase):
 class BindingTest(unittest.TestCase):
     """The repository's own bindings are the templates, with the core in harness/ not .harness/."""
 
+    def test_codex_release_handoff_decisions(self):
+        # Run only the binding command. The proposed agent action is JSON on its stdin.
+        config = json.loads((ROOT / ".codex/hooks.json").read_text())
+        hook = config["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        api = next(command for command in ALWAYS_DENIED if command.startswith("gh api --method PATCH"))
+        publish = "harness/gh-token.sh owner -- " + api
+        source = f"""cat > planner.py <<'PYCODE'
+print("{publish}")
+PYCODE"""
+        harmless = "cat <<'TEXT' > readme.txt\nhello\nTEXT"
+        for label, command, expected in (
+            ("source", source, 0),
+            ("two writes", harmless + "\n" + source, 0),
+            ("publish", publish, 2),
+            ("write then publish", harmless + "\n" + publish, 2),
+            ("publish then write", publish + "\n" + harmless, 2),
+            ("source then publish", source + "\n" + publish, 2),
+            ("unterminated", source.removesuffix("\nPYCODE"), 2),
+            ("unquoted delimiter", source.replace("'PYCODE'", "PYCODE"), 2),
+            ("interpreter", source.replace("cat >", "sh >"), 2),
+            ("pipeline", source.replace("<<'PYCODE'", "<<'PYCODE' | sh"), 2),
+        ):
+            with self.subTest(label):
+                payload = claude(command, tool="exec_command")
+                result = subprocess.run(
+                    ["/bin/sh", "-c", hook], input=json.dumps(payload), cwd=ROOT,
+                    capture_output=True, text=True, timeout=10,
+                )
+                self.assertEqual(result.returncode, expected, result.stderr)
+                if expected:
+                    self.assertIn("releases stay drafts", result.stderr)
+
     def test_bindings_match_the_templates(self):
         for path in (".claude/settings.json", ".codex/hooks.json", ".agents/hooks.json"):
             with self.subTest(path):

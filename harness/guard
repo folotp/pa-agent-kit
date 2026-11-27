@@ -199,6 +199,35 @@ undraft_re="draft=([fF]([aA][lL][sS][eE])?|0)${end}"
 # gh api writes with -X/--method POST|PATCH|PUT, or by default as soon as it sends a field.
 api_write_re="[[:space:]](-X|--method)[[:space:]=]*([pP][oO][sS][tT]|[pP][aA][tT][cC][hH]|[pP][uU][tT])|[[:space:]](-f|-F|--field|--raw-field|--input)([[:space:]=]|$)"
 
+# Only relax the release API text match when the entire request consists of standalone
+# cat writes with literal input. Parse from the first line so a header inside a quoted
+# argument, nested shell, or another heredoc cannot start a trusted data region.
+literal_file_writes() {
+  local line delimiter="" seen="" path="[a-zA-Z0-9_./-]+" gap="[[:blank:]]*"
+  local marker="'([a-zA-Z_][a-zA-Z0-9_]*)'"
+  local output=">${gap}${path}"
+  local first="^${gap}cat[[:blank:]]+${output}[[:blank:]]+<<${gap}${marker}${gap}$"
+  local last="^${gap}cat[[:blank:]]+<<${gap}${marker}[[:blank:]]+${output}${gap}$"
+  while IFS= read -r line; do
+    if [ -n "$delimiter" ]; then
+      if [ "$line" = "$delimiter" ]; then delimiter=""; fi
+    elif [[ "$line" =~ $first ]] || [[ "$line" =~ $last ]]; then
+      delimiter=${BASH_REMATCH[1]}
+      seen=1
+    elif [[ ! "$line" =~ ^[[:blank:]]*$ ]]; then
+      return 1
+    fi
+  done < <(printf '%s\n' "$cmd")
+  [ -n "$seen" ] && [ -z "$delimiter" ]
+}
+
+# Compute once, only for requests that might qualify. Every other policy still sees
+# both original views, including the literal text and destination of each write.
+literal_writes=""
+if [[ "$cmd" == *"<<"* && "$cmd" == *releases* ]] && literal_file_writes; then
+  literal_writes=1
+fi
+
 # Read through a process substitution, not a here-document: bash writes a here-document to a
 # temporary file, and where it cannot (an unwritable TMPDIR, a sandbox) the loop read nothing and
 # every command passed (until session 24b). A jq or pipe failure leaves out the \002 line, and
@@ -233,13 +262,15 @@ while IFS= read -r part; do
     deny "git branch -D deletes a branch without checking that it was merged: use /dev-delete-merged-branches (checks that GitHub shows the merge); git branch -d stays allowed"
   fi
   [[ ! "$part" =~ $merge_re ]] || deny "PA merges PRs and marks them ready: tell PA the PR number; /dev-status lists it"
-  if [[ "$part" =~ $release_create_re ]] || [[ "$part" =~ $release_edit_re ]] || [[ "$part" =~ $api_release_re ]]; then
+  api_release=""
+  if [ -z "$literal_writes" ] && [[ "$part" =~ $api_release_re ]]; then api_release=1; fi
+  if [[ "$part" =~ $release_create_re ]] || [[ "$part" =~ $release_edit_re ]] || [ -n "$api_release" ]; then
     [[ ! "$part" =~ $undraft_re ]] || deny "releases stay drafts: PA publishes them, with /dev-plugin-release in the workshop or /dev-run-with-owner-token elsewhere"
   fi
   if [[ "$part" =~ $release_create_re ]] && [[ ! "$part" =~ $draft_re ]]; then
     deny "releases stay drafts: create them with --draft; PA publishes them, with /dev-plugin-release in the workshop or /dev-run-with-owner-token elsewhere"
   fi
-  if [[ "$part" =~ $api_release_re ]] && [[ "$part" =~ $api_write_re ]] && [[ "$part" != *draft=true* ]]; then
+  if [ -n "$api_release" ] && [[ "$part" =~ $api_write_re ]] && [[ "$part" != *draft=true* ]]; then
     deny "releases stay drafts: a release written through gh api needs draft=true; PA publishes them, with /dev-plugin-release in the workshop or /dev-run-with-owner-token elsewhere"
   fi
 done < <(printf '%s' "$cmd" | jq -Rrs "$views" 2>/dev/null)
