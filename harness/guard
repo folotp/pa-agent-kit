@@ -208,7 +208,9 @@ literal_file_writes() {
   local output=">${gap}${path}"
   local first="^${gap}cat[[:blank:]]+${output}[[:blank:]]+<<${gap}${marker}${gap}$"
   local last="^${gap}cat[[:blank:]]+<<${gap}${marker}[[:blank:]]+${output}${gap}$"
+  local remaining=$((${#cmd} + 1))
   while IFS= read -r line; do
+    remaining=$((remaining - ${#line} - 1))
     if [ -n "$delimiter" ]; then
       if [ "$line" = "$delimiter" ]; then delimiter=""; fi
     elif [[ "$line" =~ $first ]] || [[ "$line" =~ $last ]]; then
@@ -218,7 +220,9 @@ literal_file_writes() {
       return 1
     fi
   done < <(printf '%s\n' "$cmd")
-  [ -n "$seen" ] && [ -z "$delimiter" ]
+  # EOF can also follow an interrupted producer. Account for every byte of cmd
+  # plus the newline printed above before accepting a sequence of complete writes.
+  [ "$remaining" -eq 0 ] && [ -n "$seen" ] && [ -z "$delimiter" ]
 }
 
 # Compute once, only for requests that might qualify. Every other policy still sees

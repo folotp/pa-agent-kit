@@ -252,6 +252,27 @@ class GuardTest(unittest.TestCase):
         # without one every command passed.
         self.assertDenied(run_guard("claude", claude("ls; git push origin main"), {"TMPDIR": "/nonexistent"}))
 
+    def test_short_read_after_a_complete_write_keeps_release_checks(self):
+        # Simulate EOF exactly after the first closing marker, only in the literal-write
+        # reader. The ordinary policy views still receive the complete inert request.
+        with tempfile.TemporaryDirectory() as directory:
+            startup = Path(directory) / "inject-eof.bash"
+            witness = Path(directory) / "reader-interrupted"
+            startup.write_text("""read() {
+  if [[ ${FUNCNAME[1]} == literal_file_writes && -n ${seen:-} && -z ${delimiter:-} ]]; then
+    : > "$EOF_WITNESS"
+    return 1
+  fi
+  builtin read "$@"
+}
+""")
+            api = next(command for command in ALWAYS_DENIED if command.startswith("gh api --method PATCH"))
+            command = "cat > note <<'END'\nhello\nEND\n" + api
+            injection = {"BASH_ENV": str(startup), "EOF_WITNESS": str(witness)}
+            result = run_guard("codex", claude(command, tool="exec_command"), injection)
+            self.assertTrue(witness.is_file(), "the reader must have observed simulated EOF")
+            self.assertDenied(result, "releases stay drafts")
+
     def test_a_judged_command_that_is_not_a_string_denies(self):
         # Session 24 (K3): an array or a number used to read as empty and pass.
         for value in (["git", "push", "origin", "main"], 5, {"argv": ["ls"]}, True):
