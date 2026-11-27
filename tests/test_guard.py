@@ -234,6 +234,25 @@ class GuardTest(unittest.TestCase):
                 else:
                     self.assertAllowed(result)
 
+    def test_literal_write_line_budget_denies_before_hook_timeout(self):
+        api = next(command for command in ALWAYS_DENIED if command.startswith("gh api --method PATCH"))
+        write = "cat > note <<'END'\nEND\n"
+        payload = claude(write + "\n" * 190_000 + api, tool="exec_command")
+        start = time.monotonic()
+        result = run_guard("codex", payload)
+        self.assertLess(time.monotonic() - start, 5)
+        self.assertDenied(result, "too many lines")
+
+        # Header, recipe and closing marker each count as a line.
+        for blank_lines in (4093, 4094):
+            with self.subTest(blank_lines=blank_lines):
+                source = "cat > note <<'END'\n" + "\n" * blank_lines + api + "\nEND"
+                result = run_guard("codex", claude(source, tool="exec_command"))
+                if blank_lines == 4093:
+                    self.assertAllowed(result)
+                else:
+                    self.assertDenied(result, "too many lines")
+
     def test_a_command_too_long_to_judge_in_time_denies(self):
         self.assertDenied(run_guard("claude", claude("ls " + "x" * 200_000)), "too long")
         self.assertDenied(run_guard("antigravity", antigravity("ls " + "x" * 200_000)), "too long", "antigravity")

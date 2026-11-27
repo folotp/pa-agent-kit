@@ -208,8 +208,12 @@ literal_file_writes() {
   local output=">${gap}${path}"
   local first="^${gap}cat[[:blank:]]+${output}[[:blank:]]+<<${gap}${marker}${gap}$"
   local last="^${gap}cat[[:blank:]]+<<${gap}${marker}[[:blank:]]+${output}${gap}$"
-  local remaining=$((${#cmd} + 1))
+  local remaining=$((${#cmd} + 1)) lines=0
   while IFS= read -r line; do
+    # The byte limit still permits nearly 200,000 empty lines. Bound Bash work
+    # before the header regexes, since clients allow a timed-out hook to pass.
+    lines=$((lines + 1))
+    [ "$lines" -le 4096 ] || deny "too many lines to verify a literal file write in time: split the write into smaller requests"
     remaining=$((remaining - ${#line} - 1))
     if [ -n "$delimiter" ]; then
       if [ "$line" = "$delimiter" ]; then delimiter=""; fi
