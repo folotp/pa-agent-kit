@@ -234,6 +234,25 @@ class GuardTest(unittest.TestCase):
                 else:
                     self.assertAllowed(result)
 
+    def test_literal_write_line_budget_denies_before_hook_timeout(self):
+        api = next(command for command in ALWAYS_DENIED if command.startswith("gh api --method PATCH"))
+        write = "cat > note <<'END'\nEND\n"
+        payload = claude(write + "\n" * 190_000 + api, tool="exec_command")
+        start = time.monotonic()
+        result = run_guard("codex", payload)
+        self.assertLess(time.monotonic() - start, 5)
+        self.assertDenied(result, "too many lines")
+
+        # Header, recipe and closing marker each count as a line.
+        for blank_lines in (4093, 4094):
+            with self.subTest(blank_lines=blank_lines):
+                source = "cat > note <<'END'\n" + "\n" * blank_lines + api + "\nEND"
+                result = run_guard("codex", claude(source, tool="exec_command"))
+                if blank_lines == 4093:
+                    self.assertAllowed(result)
+                else:
+                    self.assertDenied(result, "too many lines")
+
     def test_a_command_too_long_to_judge_in_time_denies(self):
         self.assertDenied(run_guard("claude", claude("ls " + "x" * 200_000)), "too long")
         self.assertDenied(run_guard("antigravity", antigravity("ls " + "x" * 200_000)), "too long", "antigravity")
@@ -251,6 +270,27 @@ class GuardTest(unittest.TestCase):
         # Session 24b: the split used a here-document, which needs a writable temporary folder;
         # without one every command passed.
         self.assertDenied(run_guard("claude", claude("ls; git push origin main"), {"TMPDIR": "/nonexistent"}))
+
+    def test_short_read_after_a_complete_write_keeps_release_checks(self):
+        # Simulate EOF exactly after the first closing marker, only in the literal-write
+        # reader. The ordinary policy views still receive the complete inert request.
+        with tempfile.TemporaryDirectory() as directory:
+            startup = Path(directory) / "inject-eof.bash"
+            witness = Path(directory) / "reader-interrupted"
+            startup.write_text("""read() {
+  if [[ ${FUNCNAME[1]} == literal_file_writes && -n ${seen:-} && -z ${delimiter:-} ]]; then
+    : > "$EOF_WITNESS"
+    return 1
+  fi
+  builtin read "$@"
+}
+""")
+            api = next(command for command in ALWAYS_DENIED if command.startswith("gh api --method PATCH"))
+            command = "cat > note <<'END'\nhello\nEND\n" + api
+            injection = {"BASH_ENV": str(startup), "EOF_WITNESS": str(witness)}
+            result = run_guard("codex", claude(command, tool="exec_command"), injection)
+            self.assertTrue(witness.is_file(), "the reader must have observed simulated EOF")
+            self.assertDenied(result, "releases stay drafts")
 
     def test_a_judged_command_that_is_not_a_string_denies(self):
         # Session 24 (K3): an array or a number used to read as empty and pass.
@@ -328,6 +368,38 @@ class GuardTest(unittest.TestCase):
 
 class BindingTest(unittest.TestCase):
     """The repository's own bindings are the templates, with the core in harness/ not .harness/."""
+
+    def test_codex_release_handoff_decisions(self):
+        # Run only the binding command. The proposed agent action is JSON on its stdin.
+        config = json.loads((ROOT / ".codex/hooks.json").read_text())
+        hook = config["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        api = next(command for command in ALWAYS_DENIED if command.startswith("gh api --method PATCH"))
+        publish = "harness/gh-token.sh owner -- " + api
+        source = f"""cat > planner.py <<'PYCODE'
+print("{publish}")
+PYCODE"""
+        harmless = "cat <<'TEXT' > readme.txt\nhello\nTEXT"
+        for label, command, expected in (
+            ("source", source, 0),
+            ("two writes", harmless + "\n" + source, 0),
+            ("publish", publish, 2),
+            ("write then publish", harmless + "\n" + publish, 2),
+            ("publish then write", publish + "\n" + harmless, 2),
+            ("source then publish", source + "\n" + publish, 2),
+            ("unterminated", source.removesuffix("\nPYCODE"), 2),
+            ("unquoted delimiter", source.replace("'PYCODE'", "PYCODE"), 2),
+            ("interpreter", source.replace("cat >", "sh >"), 2),
+            ("pipeline", source.replace("<<'PYCODE'", "<<'PYCODE' | sh"), 2),
+        ):
+            with self.subTest(label):
+                payload = claude(command, tool="exec_command")
+                result = subprocess.run(
+                    ["/bin/sh", "-c", hook], input=json.dumps(payload), cwd=ROOT,
+                    capture_output=True, text=True, timeout=10,
+                )
+                self.assertEqual(result.returncode, expected, result.stderr)
+                if expected:
+                    self.assertIn("releases stay drafts", result.stderr)
 
     def test_bindings_match_the_templates(self):
         for path in (".claude/settings.json", ".codex/hooks.json", ".agents/hooks.json"):
